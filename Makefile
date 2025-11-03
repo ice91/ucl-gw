@@ -22,21 +22,7 @@ slope2:
 qa: repro-min
 
 package:
-	$(PY) - <<'PYCODE'
-import json, os, hashlib, shutil
-root = "reports"
-manifest = {"files": []}
-if os.path.isdir(root):
-    for fn in sorted(os.listdir(root)):
-        p = os.path.join(root, fn)
-        if os.path.isfile(p):
-            h = hashlib.sha256(open(p, "rb").read()).hexdigest()
-            manifest["files"].append({"name": fn, "sha256": h})
-    with open(os.path.join(root, "manifest.json"), "w") as f:
-        json.dump(manifest, f, indent=2)
-shutil.make_archive("submission_envelope", "zip", ".")
-print("Created submission_envelope.zip")
-PYCODE
+	$(PY) -m scripts.package_manifest
 
 clean:
 	rm -f reports/* figs/*
