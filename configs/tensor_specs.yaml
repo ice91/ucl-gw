@@ -1,0 +1,34 @@
+{
+  "model": "horndeski-min",
+  "units": {
+    "c": 1.0,
+    "Mpl": 1.0
+  },
+  "kernels": {
+    "K": [
+      [
+        1.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0
+      ]
+    ],
+    "G": [
+      [
+        1.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0
+      ]
+    ]
+  },
+  "invariances": {
+    "rescale_fields": true,
+    "reparam_scan": 4
+  },
+  "notes": "Default tensor kernel spec for lock-check QA"
+}

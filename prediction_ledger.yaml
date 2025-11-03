@@ -1,0 +1,9 @@
+{
+  "id": "UCL-NLO-SLOPE2-LEDGER",
+  "timestamp_utc": "TBD",
+  "profile": "configs/profiles/lisa_100Hz.yaml",
+  "data_hash": "TBD",
+  "claim": "Slope s_hat in [1.8, 2.2]",
+  "level": "B",
+  "notes": "Phase 0 scaffold ledger template"
+}

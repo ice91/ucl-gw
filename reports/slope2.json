@@ -1,0 +1,12 @@
+{
+  "profile": "configs/profiles/lisa_100Hz.yaml",
+  "data": "examples/ct_bounds.csv",
+  "slope_hat": 1.9953483896320099,
+  "intercept_log10": 21.942686336278225,
+  "window_k": [
+    1e-13,
+    1e-11
+  ],
+  "accept": true,
+  "timestamp": 1762139462.700395
+}

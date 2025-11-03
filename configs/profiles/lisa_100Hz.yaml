@@ -1,0 +1,14 @@
+{
+  "pivot_f": 100.0,
+  "bandwidth": [
+    30.0,
+    300.0
+  ],
+  "systematics": {
+    "floor_sigma": 1e-18
+  },
+  "logfit": {
+    "min_k": 1e-13,
+    "max_k": 1e-11
+  }
+}
