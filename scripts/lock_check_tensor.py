@@ -32,7 +32,8 @@ def main():
 
     print(f"[{spec.get('model','custom')}] Δlock={dlock:.3e} tol={args.tolerance:.1e} PASS={passed}")
 
-    if args.enforce-exit and not passed:
+    # 修正這行：enforce_exit 用底線；加 getattr 保險
+    if getattr(args, "enforce_exit", False) and not passed:
         sys.exit(1)
 
 if __name__ == "__main__":
