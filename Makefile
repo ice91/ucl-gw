@@ -1,13 +1,13 @@
 .PHONY: env repro-min baselines clean slope2 qa package
 
-# Try python, fallback to python3
-PY := $(shell command -v python 2>/dev/null || command -v python3 2>/dev/null)
-ifeq ($(PY),)
-$(error "No Python interpreter found on PATH. Please install python3.")
-endif
+VENV := .venv
+PY   := $(VENV)/bin/python
+PIP  := $(VENV)/bin/pip
 
 env:
-	@echo "Create/activate env per environment.yml (optional)."
+	python3 -m venv $(VENV)
+	$(PIP) install -U pip
+	$(PIP) install -r requirements.txt
 
 repro-min:
 	$(PY) -m scripts.flux_ratio_frw --routeX ROD --routeY CS --L 64 --grid 32
