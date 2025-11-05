@@ -53,6 +53,10 @@ gw-ct:
 ct-aggregate:
 	$(PY) -m scripts.gw_build_ct_bounds --event $(EVENT) --aggregate
 
+gw-fetch-real:
+	$(PY) -m scripts.gw_fetch_gwosc --event $(EVENT) --ifos $(IFOS) --duration $(DURATION) --fs $(FS) --download-gwosc
+
+gw-all-real: gw-fetch-real gw-prepare
 
 package:
 	$(PY) -m scripts.package_manifest
