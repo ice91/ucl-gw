@@ -58,6 +58,23 @@ gw-fetch-real:
 
 gw-all-real: gw-fetch-real gw-prepare
 
+perifo:
+	$(PY) -m scripts.slope2_perifo --data data/ct/ct_bounds.csv --profile configs/profiles/lvk_o3.yaml
+
+jackknife:
+	$(PY) -m scripts.slope2_jackknife --data data/ct/ct_bounds.csv --profile configs/profiles/lvk_o3.yaml --event $(EVENT) --n-bootstrap 400
+
+null-perm:
+	$(PY) -m scripts.slope2_null_perm --data data/ct/ct_bounds.csv --profile configs/profiles/lvk_o3.yaml --event $(EVENT) --n-perm 2000
+
+robustness:
+	$(PY) -m scripts.slope2_robustness --data data/ct/ct_bounds.csv --event $(EVENT) --fmin_list 30,40,60 --fmax_list 600,800,1024 --method_list wls,huber --n_bins_list 16,24,32
+
+meta:
+	$(PY) -m scripts.slope2_meta --data data/ct/ct_bounds.csv --profile configs/profiles/lvk_o3.yaml
+
+qa-plus: qa perifo jackknife null-perm robustness meta
+
 package:
 	$(PY) -m scripts.package_manifest
 	$(PIP) freeze > reports/pip-freeze.txt
