@@ -1,8 +1,17 @@
-.PHONY: env repro-min baselines clean slope2 qa package ci
+.PHONY: env repro-min baselines clean slope2 qa package ci gw-fetch gw-prepare gw-all
 
 VENV := .venv
 PY   := $(VENV)/bin/python
 PIP  := $(VENV)/bin/pip
+
+EVENT    ?= GW170817
+IFOS     ?= H1,L1,V1
+FS       ?= 4096
+DURATION ?= 32
+SEED     ?= 7
+NPERSEG  ?= 16384
+NOVERLAP ?= 8192
+GATE_Z   ?= 5.0
 
 env:
 	python3 -m venv $(VENV)
@@ -20,6 +29,14 @@ baselines:
 	# dhost_ref 預期 FAIL，不加 --enforce-exit，讓 qa_gate 驗證它確實失敗
 	$(PY) -m scripts.lock_check_tensor --model configs/baselines/dhost_ref.yaml --tolerance 1e-6
 
+gw-fetch:
+	$(PY) -m scripts.gw_fetch_gwosc --event $(EVENT) --ifos $(IFOS) --duration $(DURATION) --fs $(FS) --seed $(SEED)
+
+gw-prepare:
+	$(PY) -m scripts.gw_prepare --event $(EVENT) --nperseg $(NPERSEG) --noverlap $(NOVERLAP) --gate-z $(GATE_Z)
+
+gw-all: gw-fetch gw-prepare
+
 slope2:
 	$(PY) -m scripts.nlo_slope_fit --data data/ct/ct_bounds.csv --profile configs/profiles/lisa_100Hz.yaml
 
@@ -29,15 +46,11 @@ qa:
 	$(PY) -m scripts.qa_gate
 
 package:
-	# 產出 reports/manifest.json + submission_envelope.zip
 	$(PY) -m scripts.package_manifest
-	# 輸出環境指紋
 	$(PIP) freeze > reports/pip-freeze.txt
-	# 附上 configs 與 examples 的快照，方便審稿人比對
 	zip -ur submission_envelope.zip configs examples reports figs README.md Makefile prediction_ledger.yaml
 
 clean:
 	rm -f reports/* figs/*
 
 ci: qa package
-
