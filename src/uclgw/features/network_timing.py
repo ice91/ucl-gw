@@ -60,3 +60,14 @@ def estimate_delays_and_bounds(white_paths: list[Path]) -> dict:
             "baseline_m": d, "v_over_c_minus_1": eps
         })
     return results
+
+def rough_network_timing(event: str,
+                         segments_dir: str = "data/work/segments",
+                         whitened_dir: str = "data/work/whitened") -> dict:
+    # 掃描現有白化檔
+    cand = []
+    for ifo in ("H1","L1","V1"):
+        p = Path(whitened_dir) / f"{event}_{ifo}.npz"
+        if p.exists():
+            cand.append(p)
+    return estimate_delays_and_bounds(cand)
