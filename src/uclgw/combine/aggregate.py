@@ -75,3 +75,17 @@ def aggregate(events_dir: str = "data/ct/events",
         with open(write_summary_json, "w") as f:
             json.dump(asdict(summary), f, indent=2)
     return summary
+
+def append_event_points(event_csv: str,
+                        out_csv: str = "data/ct/ct_bounds.csv",
+                        report_path: str | None = None) -> AggregateSummary:
+    """
+    將單一事件 CSV 併入彙總 out_csv。
+    內部直接呼叫 aggregate() 掃描 event_csv 所在資料夾，避免重複與型別不一致問題。
+    """
+    import os
+    events_dir = os.path.dirname(os.path.abspath(event_csv))
+    return aggregate(events_dir=events_dir,
+                     out_csv=out_csv,
+                     write_summary_json=report_path)
+
