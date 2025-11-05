@@ -1,4 +1,6 @@
 # scripts/gw_build_ct_bounds.py
+# scripts/gw_build_ct_bounds.py（最上方匯入段落）
+from src.uclgw.features.network_timing import estimate_delays_and_bounds as rough_network_timing
 from __future__ import annotations
 import argparse, os, json
 import numpy as np
