@@ -1,6 +1,7 @@
 # src/uclgw/features/dispersion_fit.py
 from __future__ import annotations
 from pathlib import Path
+from typing import List
 import numpy as np
 import pandas as pd
 import json
@@ -70,3 +71,20 @@ def build_ct_points_from_whitened(white_paths: list[Path], fmin: float, fmax: fl
                 "delta_ct2": float(di), "sigma": float(si),
             })
     return pd.DataFrame(rows)
+
+def make_proxy_k2_points(*, event: str, whitened_dir: str,
+                         fmin: float, fmax: float, n_bins: int) -> List[dict]:
+    """
+    Wrapper：掃描 {whitened_dir}/{event}_*.npz → 呼叫 build_ct_points_from_whitened
+    並回傳 list[dict]（給 gw_build_ct_bounds.py 直接寫 CSV 用）
+    """
+    wdir = Path(whitened_dir)
+    white_paths = sorted(p for p in wdir.glob(f"{event}_*.npz") if p.is_file())
+    if not white_paths:
+        raise FileNotFoundError(f"No whitened npz for event={event} in {whitened_dir}")
+
+    df = build_ct_points_from_whitened(
+        white_paths=white_paths, fmin=fmin, fmax=fmax, n_bins=n_bins, mode="proxy-k2"
+    )
+    # 轉成 rows（records）給上游寫 CSV
+    return df.to_dict(orient="records")
