@@ -1,0 +1,62 @@
+# scripts/slope2_null_block.py
+import argparse, json, sys, math
+from pathlib import Path
+import numpy as np
+sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
+from uclgw.eval.slopefit import do_fit, load_ct
+
+def _block_permute(y, block=3, rng=None):
+    if rng is None: rng = np.random.default_rng()
+    n = len(y)
+    idx = np.arange(n)
+    # 連續塊切分
+    blocks = [idx[i:i+block] for i in range(0, n, block)]
+    rng.shuffle(blocks)
+    perm = np.concatenate(blocks)
+    return y[perm], perm
+
+def main():
+    ap = argparse.ArgumentParser(description="Block-permutation null for slope-2")
+    ap.add_argument("--data", default="data/ct/ct_bounds.csv")
+    ap.add_argument("--profile", default="configs/profiles/lvk_o3.yaml")
+    ap.add_argument("--event", default=None)
+    ap.add_argument("--block", type=int, default=3)
+    ap.add_argument("--n-perm", type=int, default=5000)
+    args = ap.parse_args()
+
+    tmp = Path("data/ct/_tmp_blockperm.csv")
+    df = load_ct(Path(args.data))
+    if args.event:
+        df = df[df["event"] == args.event]
+    df = df.replace([np.inf, -np.inf], np.nan).dropna()
+    df = df[df["delta_ct2"] > 0]
+    df.to_csv(tmp, index=False)
+
+    real = do_fit(tmp, args.profile, method="wls")
+    y = real.y.copy()
+    x = real.x.copy()
+    w = real.w.copy()
+    # 固定 x,w，重新打亂 y（保留頻率鄰近性）
+    rng = np.random.default_rng(42)
+    hits = 0
+    slopes = []
+    for _ in range(args.n_perm):
+        yperm, _ = _block_permute(y, block=args.block, rng=rng)
+        # 直接 WLS：X=[x,1]
+        X = np.vstack([x, np.ones_like(x)]).T
+        W = np.diag(w)
+        XtW = X.T @ W
+        beta = np.linalg.inv(XtW @ X) @ (XtW @ yperm)
+        slopes.append(float(beta[0]))
+        if beta[0] >= real.slope:
+            hits += 1
+    p = (hits + 1) / (args.n_perm + 1)
+    out = dict(slope_real=real.slope, perm_mean=float(np.mean(slopes)),
+               perm_std=float(np.std(slopes, ddof=1)), p_value_one_sided=p,
+               n_perm=args.n_perm, block=args.block)
+    Path("reports").mkdir(parents=True, exist_ok=True)
+    Path("reports/slope2_null_block.json").write_text(json.dumps(out, indent=2))
+    print("Wrote reports/slope2_null_block.json")
+
+if __name__ == "__main__":
+    main()

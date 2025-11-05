@@ -1,56 +1,68 @@
 # scripts/gw_build_ct_bounds.py
-# scripts/gw_build_ct_bounds.py（最上方匯入段落）
-from __future__ import annotations
-import argparse, os, json
+import argparse, json, sys
+from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from src.uclgw.features.network_timing import rough_network_timing
-from src.uclgw.features.dispersion_fit import make_proxy_k2_points  # Phase 2 已有
-from src.uclgw.combine.aggregate import aggregate
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.append(str(ROOT / "src"))
 
-def write_event_csv(event: str, rows: list[dict], out_dir: str = "data/ct/events") -> str:
-    os.makedirs(out_dir, exist_ok=True)
-    out = os.path.join(out_dir, f"{event}_ct_bounds.csv")
-    pd.DataFrame(rows, columns=["event", "ifo", "f_hz", "k", "delta_ct2", "sigma"]).to_csv(out, index=False)
-    return out
+from uclgw.features.network_timing import network_delay_bounds
+from uclgw.features.dispersion_fit import (
+    proxy_k2_points,
+    phasefit_points,        # NEW
+)
+from uclgw.combine.aggregate import append_event_points
+
+C_LIGHT = 299792458.0
 
 def main():
-    ap = argparse.ArgumentParser(description="Build per-event ct_bounds and optionally aggregate all events.")
-    ap.add_argument("--event", required=True, help="Event name, e.g., GW170817")
+    ap = argparse.ArgumentParser(description="Build δc_T^2(k) points for an event (and optionally aggregate).")
+    ap.add_argument("--event", default="GW170817")
     ap.add_argument("--fmin", type=float, default=30.0)
     ap.add_argument("--fmax", type=float, default=1024.0)
     ap.add_argument("--n-bins", type=int, default=24)
-    ap.add_argument("--mode", type=str, default="proxy-k2",
-                    choices=["proxy-k2"],  # 後續可擴充: ppe-residual
-                    help="How to generate delta_ct2 vs k points")
-    ap.add_argument("--aggregate", action="store_true", help="Also aggregate into data/ct/ct_bounds.csv")
-    ap.add_argument("--segments", default="data/work/segments", help="segments JSON folder")
-    ap.add_argument("--whitened", default="data/work/whitened", help="whitened npz folder")
+    ap.add_argument("--mode", choices=["proxy-k2", "phase-fit"], default="proxy-k2")
+    ap.add_argument("--aggregate", action="store_true")
+    # Null / Off-source controls
+    ap.add_argument("--null", choices=["none", "timeshift"], default="none",
+                    help="Apply a laboratory null (destroy inter-site coherence).")
+    ap.add_argument("--label", default="", help="Optional suffix added to event name (e.g. OFF)")
     args = ap.parse_args()
 
-    # 1) network timing sanity（寫報告讓審稿人看到）
-    timing = rough_network_timing(event=args.event, segments_dir=args.segments)
-    rep_path = os.path.join("reports", f"network_timing_{args.event}.json")
-    os.makedirs("reports", exist_ok=True)
-    with open(rep_path, "w") as f:
-        json.dump(timing, f, indent=2)
-    print(f"Wrote {os.path.abspath(rep_path)}")
+    event = args.event if not args.label else f"{args.event}_{args.label}"
+    # ---------- (A) optional network timing sanity (json side-car) ----------
+    netrep = network_delay_bounds(event=args.event, work_dir=ROOT / "data/work/whitened")
+    Path("reports").mkdir(parents=True, exist_ok=True)
+    (ROOT / f"reports/network_timing_{event}.json").write_text(json.dumps(netrep, indent=2))
+    print(f"Wrote {ROOT}/reports/network_timing_{event}.json")
 
-    # 2) dispersion / proxy 生成 per-event 離散點
-    rows = make_proxy_k2_points(event=args.event,
-                                whitened_dir=args.whitened,
-                                fmin=args.fmin, fmax=args.fmax, n_bins=args.n_bins)
-    event_csv = write_event_csv(args.event, rows)
-    print(f"Wrote {os.path.abspath(event_csv)} with {len(rows)} rows")
+    # ---------- (B) build per-event δc_T^2(k) ----------
+    if args.mode == "proxy-k2":
+        df = proxy_k2_points(
+            event=args.event, fmin=args.fmin, fmax=args.fmax, n_bins=args.n_bins,
+            work_dir=ROOT / "data/work/whitened"
+        )
+    else:
+        # NEW: 真實 phase-fit
+        df = phasefit_points(
+            event=args.event, fmin=args.fmin, fmax=args.fmax, n_bins=args.n_bins,
+            work_dir=ROOT / "data/work/whitened",
+            null_mode=args.null
+        )
 
-    # 3) 合併成 data/ct/ct_bounds.csv（若指定）
+    # 寫出事件級 csv
+    out_dir = ROOT / "data/ct/events"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_event = out_dir / f"{event}_ct_bounds.csv"
+    df.to_csv(out_event, index=False)
+    print(f"Wrote {out_event} with {len(df)} rows")
+
+    # ---------- (C) aggregate ----------
     if args.aggregate:
-        summary = aggregate(events_dir="data/ct/events",
-                            out_csv="data/ct/ct_bounds.csv",
-                            write_summary_json="reports/aggregate_summary.json")
-        print(f"Updated {os.path.abspath('data/ct/ct_bounds.csv')} "
-              f"(events={summary.n_events}, rows={summary.n_rows})")
+        agg_path = ROOT / "data/ct/ct_bounds.csv"
+        append_event_points(out_event, agg_path, report_path=ROOT / "reports/aggregate_summary.json")
+        print(f"Updated {agg_path} (events=?, rows={sum(1 for _ in open(agg_path)) - 1})")
 
 if __name__ == "__main__":
     main()

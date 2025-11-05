@@ -75,6 +75,27 @@ meta:
 
 qa-plus: qa perifo jackknife null-perm robustness meta
 
+# 真・phase-fit 事件表（primary: 30–800 Hz；stress: 30–1024 Hz）
+phase-fit:
+	$(PY) -m scripts.gw_build_ct_bounds --event $(EVENT) --mode phase-fit --fmin 30 --fmax 1024 --n-bins 24 --aggregate
+
+phase-fit-primary:
+	$(PY) -m scripts.gw_build_ct_bounds --event $(EVENT) --mode phase-fit --fmin 30 --fmax 800 --n-bins 24 --aggregate
+
+# Off-source/Null（以 timeshift 破壞跨站相干）
+offsource:
+	$(PY) -m scripts.gw_build_ct_bounds --event $(EVENT) --mode phase-fit --fmin 30 --fmax 800 --n-bins 24 --null timeshift --label OFF --aggregate
+
+# 嚴格 Null 檢定
+null-block:
+	$(PY) -m scripts.slope2_null_block --data data/ct/ct_bounds.csv --profile configs/profiles/lvk_o3.yaml --event $(EVENT) --block 3 --n-perm 5000
+
+null-signflip:
+	$(PY) -m scripts.slope2_null_signflip --data data/ct/ct_bounds.csv --profile configs/profiles/lvk_o3.yaml --event $(EVENT) --n-perm 5000
+
+# 強化版一鍵：先建 primary 事件表，再做一套 QA+Null
+qa-plus2: phase-fit-primary slope2 perifo jackknife robustness null-block null-signflip
+
 package:
 	$(PY) -m scripts.package_manifest
 	$(PIP) freeze > reports/pip-freeze.txt

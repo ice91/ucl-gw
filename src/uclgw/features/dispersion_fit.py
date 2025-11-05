@@ -1,90 +1,138 @@
 # src/uclgw/features/dispersion_fit.py
 from __future__ import annotations
+import json
 from pathlib import Path
-from typing import List
 import numpy as np
 import pandas as pd
-import json
 
-C = 299792458.0  # m/s
-TINY = 1e-30
+C_LIGHT = 299792458.0
 
-def _periodogram(w: np.ndarray, fs: float):
-    n = w.size
-    W = np.fft.rfft(w)
-    f = np.fft.rfftfreq(n, d=1.0/fs)
-    # white series → 平坦，但仍可作權重
-    P = (np.abs(W)**2) / max(TINY, n)
-    return f, P
+# ---------- helper: load whitened ----------
+def _load_white(work_dir: Path, event: str):
+    # expects files data/work/whitened/{event}_{IFO}.npz
+    out = {}
+    for ifo in ("H1", "L1", "V1"):
+        p = work_dir / f"{event}_{ifo}.npz"
+        if not p.exists():
+            continue
+        dat = np.load(p, allow_pickle=True)
+        t = dat["t"]; w = dat["w"]
+        meta = json.loads(str(dat["meta"]))
+        out[ifo] = dict(t=t, w=w, fs=meta["fs"], meta=meta)
+    if not out:
+        raise RuntimeError(f"No whitened files found for {event} in {work_dir}")
+    return out
 
-def _choose_bins_logspace(f, P, fmin, fmax, n_bins):
-    mask = (f >= fmin) & (f <= fmax)
-    f_sel = f[mask]
-    P_sel = P[mask]
-    if f_sel.size < n_bins:
-        n_bins = max(4, f_sel.size)
-    edges = np.logspace(np.log10(max(fmin, 1e-3)), np.log10(fmax), n_bins+1)
-    centers = np.sqrt(edges[:-1]*edges[1:])
-    idxs = []
-    amp = []
-    for lo, hi in zip(edges[:-1], edges[1:]):
-        m = (f_sel >= lo) & (f_sel < hi)
-        if np.any(m):
-            # 取能量最大的頻點代表該窗；也可改中位數
-            j = np.argmax(P_sel[m])
-            pick = np.flatnonzero(m)[j]
-            idxs.append(pick)
-            amp.append(P_sel[pick])
-    return f_sel[idxs], np.array(amp)
+# ---------- helper: frequency grid bins ----------
+def _freq_bins(fmin: float, fmax: float, n_bins: int):
+    edges = np.geomspace(fmin, fmax, n_bins + 1)
+    centers = np.sqrt(edges[:-1] * edges[1:])
+    return edges, centers
 
-def _proxy_k2_points(f_points: np.ndarray, amps: np.ndarray, alpha: float = 1e-20):
-    # 以 k0 為幾何平均頻率；delta_cT^2 = alpha * (k/k0)^2
-    k = 2*np.pi*f_points / C
-    k0 = np.exp(np.mean(np.log(np.maximum(k, 1e-30))))
-    delta = alpha * (np.maximum(k, 1e-30)/k0)**2
-    # 簡單不確定度模型：幅度權重的 1/sqrt 對應
-    sigma = 0.3 * delta * (np.median(amps) / np.maximum(amps, 1e-30))**0.5
-    return k, delta, sigma
-
-def build_ct_points_from_whitened(white_paths: list[Path], fmin: float, fmax: float,
-                                  n_bins: int = 24, mode: str = "proxy-k2") -> pd.DataFrame:
+# ---------- proxy-k2 (既有) ----------
+def proxy_k2_points(event: str, fmin: float, fmax: float, n_bins: int, work_dir: Path) -> pd.DataFrame:
+    _, fcs = _freq_bins(fmin, fmax, n_bins)
+    k = 2.0 * np.pi * fcs / C_LIGHT
+    # 只為了 slope（截距不重要），直接給 δc_T^2 ∝ k^2
+    y = (k**2)
+    # 估計 sigma：常數權重（WLS 等效 OLS）
+    sigma = np.full_like(y, 1e-2)
     rows = []
-    for p in white_paths:
-        d = np.load(p, allow_pickle=True)
-        w = d["w"].astype(float)
-        meta = json.loads(str(d["meta"]))
-        fs = float(meta["fs"])
-        event = meta["event"]; ifo = meta["ifo"]
-
-        f, P = _periodogram(w, fs)
-        f_pts, amps = _choose_bins_logspace(f, P, fmin, fmax, n_bins)
-
-        if mode == "proxy-k2":
-            k, delta, sig = _proxy_k2_points(f_pts, amps, alpha=1e-20)
-        else:
-            raise NotImplementedError(f"mode={mode} not implemented")
-
-        for fi, ki, di, si in zip(f_pts, k, delta, sig):
-            rows.append({
-                "event": event, "ifo": ifo,
-                "f_hz": float(fi), "k": float(ki),
-                "delta_ct2": float(di), "sigma": float(si),
-            })
+    for ifo in ("H1", "L1", "V1"):
+        for fi, ki, yi, si in zip(fcs, k, y, sigma):
+            rows.append(dict(event=event, ifo=ifo, f_hz=float(fi),
+                             k=float(ki), delta_ct2=float(yi), sigma=float(si)))
     return pd.DataFrame(rows)
 
-def make_proxy_k2_points(*, event: str, whitened_dir: str,
-                         fmin: float, fmax: float, n_bins: int) -> List[dict]:
-    """
-    Wrapper：掃描 {whitened_dir}/{event}_*.npz → 呼叫 build_ct_points_from_whitened
-    並回傳 list[dict]（給 gw_build_ct_bounds.py 直接寫 CSV 用）
-    """
-    wdir = Path(whitened_dir)
-    white_paths = sorted(p for p in wdir.glob(f"{event}_*.npz") if p.is_file())
-    if not white_paths:
-        raise FileNotFoundError(f"No whitened npz for event={event} in {whitened_dir}")
+# ---------- NEW: phase-fit via cross-spectrum ----------
+def _welch_csd(x: np.ndarray, y: np.ndarray, fs: float, nperseg: int = 8192, noverlap: int | None = None):
+    if noverlap is None:
+        noverlap = nperseg // 2
+    n = min(x.size, y.size)
+    step = nperseg - noverlap
+    win = np.hanning(nperseg)
+    U = (win**2).sum()
+    i = 0; M = 0
+    Sxy = None; Sxx = None; Syy = None
+    while i + nperseg <= n:
+        xs = x[i:i+nperseg] * win
+        ys = y[i:i+nperseg] * win
+        X = np.fft.rfft(xs); Y = np.fft.rfft(ys)
+        _Sxy = (X * np.conj(Y)) * (2.0/(fs*U))
+        _Sxx = (np.abs(X)**2) * (2.0/(fs*U))
+        _Syy = (np.abs(Y)**2) * (2.0/(fs*U))
+        if Sxy is None:
+            Sxy, Sxx, Syy = _Sxy, _Sxx, _Syy
+        else:
+            Sxy += _Sxy; Sxx += _Sxx; Syy += _Syy
+        M += 1; i += step
+    if M == 0:
+        raise RuntimeError("window too large for series")
+    Sxy /= M; Sxx /= M; Syy /= M
+    f = np.fft.rfftfreq(nperseg, d=1.0/fs)
+    # 相干度
+    gamma2 = (np.abs(Sxy)**2) / (np.maximum(Sxx, 1e-30) * np.maximum(Syy, 1e-30))
+    gamma2 = np.clip(gamma2, 0.0, 1.0)
+    # 相位
+    phi = np.unwrap(np.angle(Sxy))
+    return f, phi, gamma2, M
 
-    df = build_ct_points_from_whitened(
-        white_paths=white_paths, fmin=fmin, fmax=fmax, n_bins=n_bins, mode="proxy-k2"
-    )
-    # 轉成 rows（records）給上游寫 CSV
-    return df.to_dict(orient="records")
+def _fit_linear(x, y, w=None):
+    X = np.vstack([x, np.ones_like(x)]).T
+    if w is None:
+        beta, *_ = np.linalg.lstsq(X, y, rcond=None)
+        return beta[0], beta[1]
+    W = np.diag(w)
+    XtW = X.T @ W
+    beta = np.linalg.inv(XtW @ X) @ (XtW @ y)
+    return beta[0], beta[1]
+
+def _phasefit_pair(xA, xB, fs, fmin, fmax, n_bins, null_mode="none"):
+    # 可選 null：循環位移其中一路，破壞跨站相干
+    if null_mode == "timeshift":
+        shift = np.random.randint(int(0.2*fs), int(0.4*fs))  # 0.2~0.4s
+        xB = np.roll(xB, shift)
+
+    f, phi, gamma2, M = _welch_csd(xA, xB, fs=fs, nperseg=8192, noverlap=4096)
+    # 只取頻窗
+    mwin = (f >= fmin) & (f <= fmax)
+    f = f[mwin]; phi = phi[mwin]; gamma2 = gamma2[mwin]
+    # 拿掉「整體到達時差」：phi ≈ 2π f τ + ϕ_res。線性擬合後取殘差 |ϕ_res|
+    a, b = _fit_linear(f, phi, w=gamma2)  # phi ~ a f + b
+    phi_res = phi - (a*f + b)
+    # 以頻帶等比分箱
+    edges, centers = _freq_bins(fmin, fmax, n_bins)
+    rows = []
+    for i in range(len(edges)-1):
+        mask = (f>=edges[i]) & (f<edges[i+1])
+        if not np.any(mask): 
+            continue
+        # bin 內的 proxy：|phi_res| 代表色散相位偏差強度；σ_phi 由相干度近似
+        # var(phi) ≈ (1-γ²)/(2Mγ²)
+        g = np.clip(np.median(gamma2[mask]), 1e-6, 1-1e-6)
+        var_phi = (1.0 - g) / (2.0 * M * g)
+        sigma_phi = np.sqrt(max(var_phi, 1e-12))
+        y = float(np.median(np.abs(phi_res[mask]))) + 1e-16
+        ff = float(centers[i])
+        k = 2.0*np.pi*ff/C_LIGHT
+        rows.append((ff, k, y, sigma_phi))
+    return rows
+
+def phasefit_points(event: str, fmin: float, fmax: float, n_bins: int,
+                    work_dir: Path, null_mode: str = "none") -> pd.DataFrame:
+    W = _load_white(work_dir, event)
+    have = sorted(W.keys())
+    pairs = []
+    if "H1" in have and "L1" in have: pairs.append(("H1","L1"))
+    if "H1" in have and "V1" in have: pairs.append(("H1","V1"))
+    if "L1" in have and "V1" in have: pairs.append(("L1","V1"))
+    rows = []
+    for A,B in pairs:
+        pa = _phasefit_pair(W[A]["w"], W[B]["w"], fs=W[A]["fs"],
+                            fmin=fmin, fmax=fmax, n_bins=n_bins, null_mode=null_mode)
+        for (ff, k, y, s) in pa:
+            rows.append(dict(event=event, ifo=f"{A}-{B}", f_hz=ff, k=k,
+                             delta_ct2=y, sigma=s))
+    if not rows:
+        raise RuntimeError("No IFO pairs available for phase-fit.")
+    return pd.DataFrame(rows)
