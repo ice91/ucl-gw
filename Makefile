@@ -45,6 +45,13 @@ qa:
 	$(MAKE) baselines
 	$(PY) -m scripts.qa_gate
 
+gw-ct:
+	$(PY) -m scripts.gw_build_ct_bounds --event $(EVENT) --fmin 30 --fmax 1024 --n-bins 24 --mode proxy-k2 --aggregate
+
+ct-aggregate:
+	$(PY) -m scripts.gw_build_ct_bounds --event $(EVENT) --aggregate
+
+
 package:
 	$(PY) -m scripts.package_manifest
 	$(PIP) freeze > reports/pip-freeze.txt
