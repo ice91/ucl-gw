@@ -74,12 +74,6 @@ def _logspace_edges(fmin: float, fmax: float, n_bins: int) -> np.ndarray:
     return np.logspace(np.log10(fmin), np.log10(fmax), n_bins + 1)
 
 
-def _bin_rms(values: np.ndarray, weights: np.ndarray) -> float:
-    w = np.maximum(np.asarray(weights), 0.0)
-    if values.size == 0 or np.sum(w) <= 0: return np.nan
-    return float(np.sqrt(np.sum(w * (values**2)) / np.sum(w)))
-
-
 def _detect_ifos(white_dir: Path, event: str) -> List[str]:
     ifos = []
     for p in sorted((white_dir).glob(f"{event}_*.npz")):
@@ -118,7 +112,7 @@ def proxy_k2_points(event: str, fmin: float, fmax: float, n_bins: int, work_dir:
     return pd.DataFrame(rows)
 
 # ------------------------
-# 真實：phase-fit（產出標準欄位）
+# 真實：phase-fit（y = |dφ/df| 於每個頻帶；輸出標準欄位）
 # ------------------------
 def phasefit_points(
     event: str,
@@ -127,9 +121,9 @@ def phasefit_points(
     n_bins: int,
     work_dir: Path,
     null_mode: str = "none",
-    nperseg: int = 4096,
+    nperseg: int = 8192,            # ↑ 提升解析度
     noverlap: int | None = None,
-    coherence_min: float = 0.6,
+    coherence_min: float = 0.8,     # ↑ 更嚴的相干濾波
     min_bins_count: int = 6,
 ) -> pd.DataFrame:
 
@@ -138,51 +132,58 @@ def phasefit_points(
     if len(ifos) < 2:
         raise RuntimeError(f"need >=2 IFOs, got {ifos}")
 
+    fs_ref = None
+    for ifo in ifos:
+        fs = float(W[ifo]["meta"]["fs"])
+        if fs_ref is None: fs_ref = fs
+        if abs(fs - fs_ref) > 1e-9:
+            raise RuntimeError("sampling rate mismatch across IFOs")
+
     pairs = [(ifos[i], ifos[j]) for i in range(len(ifos)) for j in range(i+1, len(ifos))]
 
+    # 將每個 pair 的 bin 統計暫存
     pair_bins: Dict[tuple[str, str], Dict[str, np.ndarray]] = {}
-    for (a, b) in pairs:
-        ta, wa, ma = W[a]["t"], W[a]["w"], W[a]["meta"]
-        tb, wb, mb = W[b]["t"], W[b]["w"], W[b]["meta"]
-        if abs(ma["fs"] - mb["fs"]) > 1e-9:
-            raise RuntimeError("sampling rate mismatch")
+    edges = _logspace_edges(fmin, fmax, n_bins)
 
-        fs = float(ma["fs"])
-        xa = wa.copy(); yb = wb.copy()
+    for (a, b) in pairs:
+        xa = W[a]["w"].copy()
+        yb = W[b]["w"].copy()
         if null_mode == "timeshift":
             yb = _timeshift(yb, shift_samples=(len(yb) // 4))
 
-        f, Cxy, Sxx, Syy = _welch_csd_xy(xa, yb, fs=fs, nperseg=nperseg, noverlap=noverlap)
+        f, Cxy, Sxx, Syy = _welch_csd_xy(xa, yb, fs=fs_ref, nperseg=nperseg, noverlap=noverlap)
         coh2 = np.clip((np.abs(Cxy)**2) / (np.maximum(Sxx,1e-30)*np.maximum(Syy,1e-30)), 0.0, 1.0)
+        phi = np.unwrap(np.angle(Cxy))
 
+        # 先在整段內做一次加權線性去趨勢（校正時延）
         mband = (f >= fmin) & (f <= fmax) & (coh2 >= coherence_min)
         if not np.any(mband):
+            # 若過嚴，放寬相干門檻再求一次，但仍保留原 coherence_min 作為 bin 權重
             mband = (f >= fmin) & (f <= fmax)
 
-        phi = np.unwrap(np.angle(Cxy))
-        x = f[mband]; y = phi[mband]; w = coh2[mband]
-        if x.size < 8:  # 太少不穩
-            continue
-        a0, a1 = _weighted_linfit(x, y, w)
-        phi_res = y - (a0 + a1 * x)
+        a0, a1 = _weighted_linfit(f[mband], phi[mband], coh2[mband])
+        phi_res = phi - (a0 + a1 * f)
 
-        edges = _logspace_edges(fmin, fmax, n_bins)
+        # 逐 bin 以加權回歸估 |dφ/df|
         k_list, y_list, w_list, fmid_list = [], [], [], []
         for i in range(n_bins):
             flo, fhi = edges[i], edges[i+1]
-            sel = (x >= flo) & (x < fhi)
+            sel = (f >= flo) & (f < fhi) & (coh2 >= coherence_min)
             if np.sum(sel) < 3:
                 k_list.append(np.nan); y_list.append(np.nan); w_list.append(0.0); fmid_list.append(np.nan); continue
+
+            a_loc, b_loc = _weighted_linfit(f[sel], phi_res[sel], coh2[sel])  # b_loc ≈ dφ/df
+            ybin = abs(b_loc)                                                # ← 這裡改成「斜率」而非 RMS 幅度
             fmid = np.sqrt(flo * fhi)
             kbin = 2.0 * np.pi * fmid / C_LIGHT
-            ybin = _bin_rms(np.abs(phi_res[sel]), w[sel])   # 無單位 proxy (>0)
-            wbin = float(np.sum(w[sel]))
+            wbin = float(np.sum(coh2[sel]))
+
             k_list.append(kbin); y_list.append(ybin); w_list.append(wbin); fmid_list.append(fmid)
 
         pair_bins[(a,b)] = {"k": np.array(k_list), "y": np.array(y_list),
                             "w": np.array(w_list), "fmid": np.array(fmid_list)}
 
-    # 對每個 IFO，把它參與的所有 pair 在同一 bin 聚合（加權平均）
+    # 對每個 IFO，把它參與的所有 pair 在同一 bin 聚合（以權重加權）
     rows = []
     for ifo in ifos:
         for ib in range(n_bins):
@@ -195,12 +196,11 @@ def phasefit_points(
                 ys.append(yb); ws.append(wb); ks.append(kb); fs.append(fm)
             if len(ys) == 0: continue
             y_agg = float(np.sum(np.asarray(ws)*np.asarray(ys)) / np.sum(ws))
-            k_agg = float(np.mean(ks))
-            f_agg = float(np.mean(fs))
-            # 將 proxy y 映射到標準欄位：delta_ct2 與 sigma
-            # 設定：delta_ct2 := y_agg（只影響截距，斜率不變）
+            k_agg = float(np.sum(np.asarray(ws)*np.asarray(ks)) / np.sum(ws))
+            f_agg = float(np.sum(np.asarray(ws)*np.asarray(fs)) / np.sum(ws))
+
+            # map 到標準 schema
             delta_ct2 = max(y_agg, 1e-18)
-            # sigma 讓權重 ~ w：取 sigma ≈ delta_ct2 / sqrt(w_sum)
             w_sum = float(np.sum(ws))
             sigma = float(delta_ct2 / np.sqrt(w_sum + 1e-9))
             rows.append({"event": event, "ifo": ifo, "f_hz": f_agg, "k": k_agg,
@@ -208,7 +208,6 @@ def phasefit_points(
 
     df = pd.DataFrame(rows)
     if df.empty: return df
-    # 確保每 IFO 至少有幾個 bin，過 sparse 就先拿掉
     ok = df.groupby("ifo")["k"].count() >= min_bins_count
     keep = set(ok[ok].index.tolist())
     df = df[df["ifo"].isin(keep)].reset_index(drop=True)

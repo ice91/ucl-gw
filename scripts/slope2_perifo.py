@@ -1,40 +1,59 @@
 # scripts/slope2_perifo.py
-import argparse, json, sys
+import argparse, json
 from pathlib import Path
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.append(str(ROOT / "src"))
+import pandas as pd
 
-from uclgw.eval.slopefit import do_fit, load_ct
+from uclgw.eval.slopefit import load_ct, do_fit
 
 def main():
-    ap = argparse.ArgumentParser(description="Per-IFO / Per-Event slope-2 consistency")
+    ap = argparse.ArgumentParser(description="Per-IFO slope2 fit per event (WLS).")
     ap.add_argument("--data", default="data/ct/ct_bounds.csv")
     ap.add_argument("--profile", default="configs/profiles/lvk_o3.yaml")
     args = ap.parse_args()
 
-    csv = Path(args.data)
-    df = load_ct(csv)
+    df = load_ct(Path(args.data))
     events = sorted(df["event"].unique())
-    out = {"by_event": {}, "overall": {}}
 
+    by_event = {}
     for ev in events:
-        dfe = df[df["event"] == ev]
-        ifos = sorted(dfe["ifo"].unique())
-        ev_res = {"per_ifo": {}, "combined_wls": None}
-        # per IFO
-        for ifo in ifos:
-            r = do_fit(csv, Path(args.profile), method="wls", ifo=ifo, event=ev)
-            ev_res["per_ifo"][ifo] = r.__dict__
+        dfe = df[df["event"] == ev].copy()
+        if dfe.empty: continue
 
-        # combined（以 WLS on all points）
-        r_all = do_fit(csv, Path(args.profile), method="wls", event=ev)
-        ev_res["combined_wls"] = r_all.__dict__
-        out["by_event"][ev] = ev_res
+        # 合併（全 IFO）
+        tmp_all = Path("data/ct/_tmp_real.csv")
+        dfe.to_csv(tmp_all, index=False)
+        r_all = do_fit(tmp_all, Path(args.profile), method="wls")
 
-    # overall: 若有多事件，可再合併
-    out["overall"]["n_events"] = len(events)
+        perifo = {}
+        for ifo in sorted(dfe["ifo"].unique()):
+            dfi = dfe[dfe["ifo"] == ifo].copy()
+            if dfi.empty: continue
+            tmp_1 = Path("data/ct/_tmp_real.csv")
+            dfi.to_csv(tmp_1, index=False)
+            r = do_fit(tmp_1, Path(args.profile), method="wls")
+            perifo[ifo] = {
+                "slope": float(r.slope),
+                "intercept": float(r.intercept),
+                "n": int(r.mask_count),
+                "method": "wls",
+                "mask_count": int(r.mask_count),
+                "window_k": list(map(float, r.window_k))
+            }
 
-    Path("reports").mkdir(exist_ok=True, parents=True)
+        by_event[ev] = {
+            "per_ifo": perifo,
+            "combined_wls": {
+                "slope": float(r_all.slope),
+                "intercept": float(r_all.intercept),
+                "n": int(r_all.mask_count),
+                "method": "wls",
+                "mask_count": int(r_all.mask_count),
+                "window_k": list(map(float, r_all.window_k))
+            }
+        }
+
+    out = {"by_event": by_event, "overall": {"n_events": len(by_event)}}
+    Path("reports").mkdir(parents=True, exist_ok=True)
     Path("reports/slope2_perifo.json").write_text(json.dumps(out, indent=2))
     print("Wrote reports/slope2_perifo.json")
 
