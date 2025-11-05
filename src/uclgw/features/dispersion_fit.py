@@ -168,9 +168,12 @@ def phasefit_points(
         k_list, y_list, w_list, fmid_list = [], [], [], []
         for i in range(n_bins):
             flo, fhi = edges[i], edges[i+1]
+            # 改為（加入 fallback）：
             sel = (f >= flo) & (f < fhi) & (coh2 >= coherence_min)
             if np.sum(sel) < 3:
-                k_list.append(np.nan); y_list.append(np.nan); w_list.append(0.0); fmid_list.append(np.nan); continue
+                sel = (f >= flo) & (f < fhi)            # ← 放寬：只看頻帶
+                if np.sum(sel) < 3:
+                    k_list.append(np.nan); y_list.append(np.nan); w_list.append(0.0); fmid_list.append(np.nan); continue
 
             a_loc, b_loc = _weighted_linfit(f[sel], phi_res[sel], coh2[sel])  # b_loc ≈ dφ/df
             ybin = abs(b_loc)                                                # ← 這裡改成「斜率」而非 RMS 幅度

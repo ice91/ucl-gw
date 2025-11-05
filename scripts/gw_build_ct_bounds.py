@@ -18,21 +18,31 @@ def _ensure_standard_schema(df: pd.DataFrame) -> pd.DataFrame:
     兼容：若輸入含有 y/w 或缺 f_hz，就補齊/改名成標準六欄。
     標準欄位: ['event','ifo','f_hz','k','delta_ct2','sigma']
     """
+    keep = ["event","ifo","f_hz","k","delta_ct2","sigma"]
+
+    # 1) 空表：直接回標頭，避免 KeyError
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return pd.DataFrame(columns=keep)
+
     df = df.copy()
-    # f_hz
+
+    # 2) 盡量補齊缺欄
     if "f_hz" not in df.columns and "k" in df.columns:
         df["f_hz"] = (df["k"].astype(float) * C_LIGHT) / (2.0*np.pi)
-    # delta_ct2
     if "delta_ct2" not in df.columns and "y" in df.columns:
         df["delta_ct2"] = df["y"].astype(float).clip(lower=1e-18)
-    # sigma
     if "sigma" not in df.columns and "w" in df.columns:
         w = df["w"].astype(float).clip(lower=0.0)
         d = df["delta_ct2"].astype(float).clip(lower=1e-18)
         df["sigma"] = d / np.sqrt(w + 1e-9)
-    # 最終只保留標準欄位（若還缺就讓上游報錯）
-    keep = ["event","ifo","f_hz","k","delta_ct2","sigma"]
+
+    # 3) 還缺的欄位先補 NaN（讓彙整與後續程式能跑）
+    for c in keep:
+        if c not in df.columns:
+            df[c] = np.nan
+
     return df[keep]
+
 
 def main():
     ap = argparse.ArgumentParser(description="Build δc_T^2(k) points for an event (and optionally aggregate).")
@@ -44,6 +54,9 @@ def main():
     ap.add_argument("--aggregate", action="store_true")
     ap.add_argument("--null", choices=["none", "timeshift"], default="none", help="Apply a laboratory null.")
     ap.add_argument("--label", default="", help="Suffix for event name (e.g. OFF)")
+    ap.add_argument("--coh-min", type=float, default=0.6)     # 先用 0.6 比較穩
+    ap.add_argument("--nperseg", type=int, default=8192)
+    ap.add_argument("--noverlap", type=int, default=None)
     args = ap.parse_args()
 
     event = args.event if not args.label else f"{args.event}_{args.label}"
