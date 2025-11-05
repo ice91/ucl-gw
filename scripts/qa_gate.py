@@ -1,59 +1,72 @@
 # scripts/qa_gate.py
-import json, csv, sys, os
+from __future__ import annotations
+import os, json, csv, sys
+from typing import Tuple
 
-def fail(msg):
-    print(f"[QA FAIL] {msg}")
-    sys.exit(1)
+FLUX_JSON = "reports/flux_ratio.json"
+SLOPE_JSON = "reports/slope2.json"
+LOCK_CSV  = "reports/lock_check.csv"
 
-def check_flux_ratio(path="reports/flux_ratio.json"):
-    if not os.path.exists(path):
-        fail(f"missing {path}")
-    with open(path) as f:
-        j = json.load(f)
-    if not j.get("pass", False):
-        fail("flux_ratio pass flag is False")
-    print("[QA OK] flux_ratio")
+# 可調參（門檻）
+SLOPE_MIN, SLOPE_MAX = 1.8, 2.2
+REQUIRE_MODELS_PASS  = ["gr-flat", "horndeski-min"]
+REQUIRE_MODELS_FAIL  = ["dhost", "dhost-ref", "DHOST"]
 
-def check_lock_check(path="reports/lock_check.csv"):
-    if not os.path.exists(path):
-        fail(f"missing {path}")
-    # 至少要有 PASS，且 dhost-ref 必須 FAIL（no-mimic 控制）
-    saw_pass = False
-    saw_dhost_fail = False
-    with open(path) as f:
-        rd = csv.DictReader(f)
-        rows = list(rd)
-    if not rows:
-        fail("lock_check.csv is empty")
-    for r in rows:
-        model = r.get("model","")
-        passed = (r.get("pass","0") in ("1","True","true"))
-        if passed: 
-            saw_pass = True
-        if model == "dhost-ref" and not passed:
-            saw_dhost_fail = True
-    if not saw_pass:
-        fail("no PASS in lock_check.csv")
-    if not saw_dhost_fail:
-        fail("dhost-ref did not FAIL as expected")
-    print("[QA OK] lock_check")
+def _status(ok: bool, name: str, extra: str = ""):
+    tag = "OK" if ok else "FAIL"
+    msg = f"[QA {tag}] {name}"
+    if extra:
+        msg += f" {extra}"
+    print(msg)
+    if not ok:
+        sys.exit(2)
 
-def check_slope2(path="reports/slope2.json"):
-    if not os.path.exists(path):
-        fail(f"missing {path}")
-    with open(path) as f:
-        j = json.load(f)
-    if not j.get("accept", False):
-        fail("slope2 accept flag is False")
-    s = j.get("slope_hat", None)
-    if s is None or not (1.8 <= float(s) <= 2.2):
-        fail(f"slope_hat not in [1.8,2.2], got {s}")
-    print(f"[QA OK] slope2 (ŝ={float(s):.3f})")
+def _check_flux() -> Tuple[bool, str]:
+    if not os.path.isfile(FLUX_JSON):
+        return False, "missing reports/flux_ratio.json"
+    j = json.load(open(FLUX_JSON))
+    ok = bool(j.get("PASS", j.get("pass", False)))
+    return ok, ""
+
+def _check_slope() -> Tuple[bool, str]:
+    if not os.path.isfile(SLOPE_JSON):
+        return False, "missing reports/slope2.json"
+    j = json.load(open(SLOPE_JSON))
+    if not bool(j.get("accept", False)):
+        return False, "accept=False"
+    s = float(j.get("slope_hat", 0.0))
+    return (SLOPE_MIN <= s <= SLOPE_MAX), f"(ŝ={s:.3f})"
+
+def _check_lock() -> Tuple[bool, str]:
+    if not os.path.isfile(LOCK_CSV):
+        return False, "missing reports/lock_check.csv"
+    ok_pass = {k: False for k in REQUIRE_MODELS_PASS}
+    ok_fail = {k: False for k in REQUIRE_MODELS_FAIL}
+    with open(LOCK_CSV, newline="") as f:
+        r = csv.DictReader(f)
+        for row in r:
+            name = row.get("name", "").strip()
+            passed = row.get("PASS", row.get("pass", "")).strip().lower() in ("true", "1", "yes")
+            for k in ok_pass:
+                if k in name and passed:
+                    ok_pass[k] = True
+            for k in ok_fail:
+                if k in name and (not passed):
+                    ok_fail[k] = True
+    ok = all(ok_pass.values()) and all(ok_fail.values())
+    detail = f"pass={ok_pass} fail={ok_fail}"
+    return ok, detail
 
 def main():
-    check_flux_ratio()
-    check_lock_check()
-    check_slope2()
+    ok, extra = _check_flux()
+    _status(ok, "flux_ratio", extra)
+
+    ok, extra = _check_lock()
+    _status(ok, "lock_check", extra)
+
+    ok, extra = _check_slope()
+    _status(ok, "slope2", extra)
+
     print("[QA OK] all")
 
 if __name__ == "__main__":
