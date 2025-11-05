@@ -2,7 +2,7 @@
 from __future__ import annotations
 import os, glob, math, json
 from dataclasses import dataclass, asdict
-from typing import List, Dict
+from typing import List
 import pandas as pd
 
 REQUIRED_COLS = ["event", "ifo", "f_hz", "k", "delta_ct2", "sigma"]
@@ -29,18 +29,24 @@ def _coerce_types(df: pd.DataFrame) -> pd.DataFrame:
         df[c] = pd.to_numeric(df[c], errors="coerce")
     return df
 
-def load_event_csvs(events_dir: str) -> List[str]:
+def load_event_csvs(events_dir: str | os.PathLike) -> List[str]:
+    events_dir = os.fspath(events_dir)
     return sorted(glob.glob(os.path.join(events_dir, "*_ct_bounds.csv")))
 
-def aggregate(events_dir: str = "data/ct/events",
-              out_csv: str = "data/ct/ct_bounds.csv",
-              write_summary_json: str | None = None) -> AggregateSummary:
+def aggregate(events_dir: str | os.PathLike = "data/ct/events",
+              out_csv: str | os.PathLike = "data/ct/ct_bounds.csv",
+              write_summary_json: str | os.PathLike | None = None) -> AggregateSummary:
+    # 統一將 PathLike 轉為字串，避免 JSON dump 出錯
+    events_dir = os.fspath(events_dir)
+    out_csv = os.fspath(out_csv)
+    write_summary_json = os.fspath(write_summary_json) if write_summary_json is not None else None
+
     os.makedirs(os.path.dirname(out_csv), exist_ok=True)
     fns = load_event_csvs(events_dir)
     if not fns:
         # 建立空框架以利 downstream 腳本處理
         pd.DataFrame(columns=REQUIRED_COLS).to_csv(out_csv, index=False)
-        summary = AggregateSummary(out_csv, 0, 0, 0, [])
+        summary = AggregateSummary(out_csv=str(out_csv), n_files=0, n_rows=0, n_events=0, events=[])
         if write_summary_json:
             with open(write_summary_json, "w") as f:
                 json.dump(asdict(summary), f, indent=2)
@@ -66,7 +72,7 @@ def aggregate(events_dir: str = "data/ct/events",
     cat.to_csv(out_csv, index=False)
 
     events = sorted(cat["event"].unique().tolist())
-    summary = AggregateSummary(out_csv=out_csv,
+    summary = AggregateSummary(out_csv=str(out_csv),
                                n_files=len(fns),
                                n_rows=int(cat.shape[0]),
                                n_events=len(events),
@@ -76,16 +82,18 @@ def aggregate(events_dir: str = "data/ct/events",
             json.dump(asdict(summary), f, indent=2)
     return summary
 
-def append_event_points(event_csv: str,
-                        out_csv: str = "data/ct/ct_bounds.csv",
-                        report_path: str | None = None) -> AggregateSummary:
+def append_event_points(event_csv: str | os.PathLike,
+                        out_csv: str | os.PathLike = "data/ct/ct_bounds.csv",
+                        report_path: str | os.PathLike | None = None) -> AggregateSummary:
     """
     將單一事件 CSV 併入彙總 out_csv。
     內部直接呼叫 aggregate() 掃描 event_csv 所在資料夾，避免重複與型別不一致問題。
     """
-    import os
+    event_csv = os.fspath(event_csv)
+    out_csv = os.fspath(out_csv)
+    report_path = os.fspath(report_path) if report_path is not None else None
+
     events_dir = os.path.dirname(os.path.abspath(event_csv))
     return aggregate(events_dir=events_dir,
                      out_csv=out_csv,
                      write_summary_json=report_path)
-

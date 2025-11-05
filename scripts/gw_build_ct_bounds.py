@@ -10,7 +10,7 @@ sys.path.append(str(ROOT / "src"))
 from uclgw.features.network_timing import network_delay_bounds
 from uclgw.features.dispersion_fit import (
     proxy_k2_points,
-    phasefit_points,        # NEW
+    phasefit_points,
 )
 from uclgw.combine.aggregate import append_event_points
 
@@ -33,7 +33,7 @@ def main():
     event = args.event if not args.label else f"{args.event}_{args.label}"
     # ---------- (A) optional network timing sanity (json side-car) ----------
     netrep = network_delay_bounds(event=args.event, work_dir=ROOT / "data/work/whitened")
-    Path("reports").mkdir(parents=True, exist_ok=True)
+    (ROOT / "reports").mkdir(parents=True, exist_ok=True)
     (ROOT / f"reports/network_timing_{event}.json").write_text(json.dumps(netrep, indent=2))
     print(f"Wrote {ROOT}/reports/network_timing_{event}.json")
 
@@ -44,7 +44,7 @@ def main():
             work_dir=ROOT / "data/work/whitened"
         )
     else:
-        # NEW: 真實 phase-fit
+        # 真實 phase-fit
         df = phasefit_points(
             event=args.event, fmin=args.fmin, fmax=args.fmax, n_bins=args.n_bins,
             work_dir=ROOT / "data/work/whitened",
@@ -60,9 +60,10 @@ def main():
 
     # ---------- (C) aggregate ----------
     if args.aggregate:
-        agg_path = ROOT / "data/ct/ct_bounds.csv"
-        append_event_points(out_event, agg_path, report_path=ROOT / "reports/aggregate_summary.json")
-        print(f"Updated {agg_path} (events=?, rows={sum(1 for _ in open(agg_path)) - 1})")
+        summary = append_event_points(out_event,
+                                      out_csv=ROOT / "data/ct/ct_bounds.csv",
+                                      report_path=ROOT / "reports/aggregate_summary.json")
+        print(f"Updated {summary.out_csv} (events={summary.n_events}, rows={summary.n_rows})")
 
 if __name__ == "__main__":
     main()
