@@ -1,19 +1,11 @@
 {
-  "bandwidth": [
-    20.0,
-    1024.0
-  ],
-  "notches": [
-    [
-      50.0,
-      60.0
-    ]
-  ],
-  "systematics": {
-    "floor_sigma": 1e-19
-  },
+  "bandwidth": [20.0, 1024.0],
+  "notches": [[50.0, 60.0]],
+  "systematics": { "floor_sigma": 1e-19 },
   "logfit": {
-    "min_k": 1e-14,
-    "max_k": 1e-11
+    "min_k": 5e-7,
+    "max_k": 2.5e-5,
+    "min_points": 10
   }
 }
+

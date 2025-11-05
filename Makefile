@@ -38,7 +38,9 @@ gw-prepare:
 gw-all: gw-fetch gw-prepare
 
 slope2:
+	$(PY) -m scripts.nlo_slope_fit --data data/ct/ct_bounds.csv --profile configs/profiles/lvk_o3.yaml || \
 	$(PY) -m scripts.nlo_slope_fit --data data/ct/ct_bounds.csv --profile configs/profiles/lisa_100Hz.yaml
+
 
 qa:
 	$(MAKE) repro-min
