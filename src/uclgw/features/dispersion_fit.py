@@ -2,7 +2,7 @@
 from __future__ import annotations
 import json
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List
 import numpy as np
 import pandas as pd
 
@@ -52,13 +52,11 @@ def _welch_csd_xy(x: np.ndarray, y: np.ndarray, fs: float, nperseg: int = 4096, 
     f = np.fft.rfftfreq(nperseg, d=1.0/fs)
     return f, Cxy_avg, Sxx_avg, Syy_avg
 
-
 def _timeshift(a: np.ndarray, shift_samples: int) -> np.ndarray:
     if shift_samples == 0 or a.size == 0: return a.copy()
     s = shift_samples % a.size
     if s == 0: return a.copy()
     return np.concatenate([a[-s:], a[:-s]])
-
 
 def _weighted_linfit(x: np.ndarray, y: np.ndarray, w: np.ndarray) -> tuple[float, float]:
     w = np.asarray(w); x = np.asarray(x); y = np.asarray(y)
@@ -69,10 +67,13 @@ def _weighted_linfit(x: np.ndarray, y: np.ndarray, w: np.ndarray) -> tuple[float
     a0, a1 = beta[0], beta[1]
     return float(a0), float(a1)
 
-
 def _logspace_edges(fmin: float, fmax: float, n_bins: int) -> np.ndarray:
     return np.logspace(np.log10(fmin), np.log10(fmax), n_bins + 1)
 
+def _bin_rms(values: np.ndarray, weights: np.ndarray) -> float:
+    w = np.maximum(np.asarray(weights), 0.0)
+    if values.size == 0 or np.sum(w) <= 0: return np.nan
+    return float(np.sqrt(np.sum(w * (values**2)) / np.sum(w)))
 
 def _detect_ifos(white_dir: Path, event: str) -> List[str]:
     ifos = []
@@ -80,7 +81,6 @@ def _detect_ifos(white_dir: Path, event: str) -> List[str]:
         tag = p.stem.split("_")[-1]
         ifos.append(tag)
     return sorted(list(set(ifos)))
-
 
 def _load_whitened(work_dir: Path, event: str) -> Dict[str, Dict]:
     d: Dict[str, Dict] = {}
@@ -94,7 +94,7 @@ def _load_whitened(work_dir: Path, event: str) -> Dict[str, Dict]:
     return d
 
 # ------------------------
-# 代理：proxy-k2（補齊標準欄位）
+# 代理：proxy-k2（測試用）
 # ------------------------
 def proxy_k2_points(event: str, fmin: float, fmax: float, n_bins: int, work_dir: Path) -> pd.DataFrame:
     ifos = _detect_ifos(work_dir, event)
@@ -112,7 +112,7 @@ def proxy_k2_points(event: str, fmin: float, fmax: float, n_bins: int, work_dir:
     return pd.DataFrame(rows)
 
 # ------------------------
-# 真實：phase-fit（y = |dφ/df| 於每個頻帶；輸出標準欄位）
+# 真實：phase-fit（用相位殘差 RMS 作 proxy，並映射回 k^2 標度）
 # ------------------------
 def phasefit_points(
     event: str,
@@ -121,9 +121,9 @@ def phasefit_points(
     n_bins: int,
     work_dir: Path,
     null_mode: str = "none",
-    nperseg: int = 8192,            # ↑ 提升解析度
+    nperseg: int = 8192,
     noverlap: int | None = None,
-    coherence_min: float = 0.8,     # ↑ 更嚴的相干濾波
+    coherence_min: float = 0.6,
     min_bins_count: int = 6,
 ) -> pd.DataFrame:
 
@@ -140,10 +140,9 @@ def phasefit_points(
             raise RuntimeError("sampling rate mismatch across IFOs")
 
     pairs = [(ifos[i], ifos[j]) for i in range(len(ifos)) for j in range(i+1, len(ifos))]
-
-    # 將每個 pair 的 bin 統計暫存
-    pair_bins: Dict[tuple[str, str], Dict[str, np.ndarray]] = {}
     edges = _logspace_edges(fmin, fmax, n_bins)
+
+    pair_bins: Dict[tuple[str, str], Dict[str, np.ndarray]] = {}
 
     for (a, b) in pairs:
         xa = W[a]["w"].copy()
@@ -155,28 +154,24 @@ def phasefit_points(
         coh2 = np.clip((np.abs(Cxy)**2) / (np.maximum(Sxx,1e-30)*np.maximum(Syy,1e-30)), 0.0, 1.0)
         phi = np.unwrap(np.angle(Cxy))
 
-        # 先在整段內做一次加權線性去趨勢（校正時延）
+        # 一次性去趨勢（扣掉跨站時延）
         mband = (f >= fmin) & (f <= fmax) & (coh2 >= coherence_min)
         if not np.any(mband):
-            # 若過嚴，放寬相干門檻再求一次，但仍保留原 coherence_min 作為 bin 權重
             mband = (f >= fmin) & (f <= fmax)
-
         a0, a1 = _weighted_linfit(f[mband], phi[mband], coh2[mband])
         phi_res = phi - (a0 + a1 * f)
 
-        # 逐 bin 以加權回歸估 |dφ/df|
+        # 逐 bin 做加權 RMS（若門檻下樣本不足，退到只看頻帶）
         k_list, y_list, w_list, fmid_list = [], [], [], []
         for i in range(n_bins):
             flo, fhi = edges[i], edges[i+1]
-            # 改為（加入 fallback）：
             sel = (f >= flo) & (f < fhi) & (coh2 >= coherence_min)
             if np.sum(sel) < 3:
-                sel = (f >= flo) & (f < fhi)            # ← 放寬：只看頻帶
+                sel = (f >= flo) & (f < fhi)
                 if np.sum(sel) < 3:
                     k_list.append(np.nan); y_list.append(np.nan); w_list.append(0.0); fmid_list.append(np.nan); continue
 
-            a_loc, b_loc = _weighted_linfit(f[sel], phi_res[sel], coh2[sel])  # b_loc ≈ dφ/df
-            ybin = abs(b_loc)                                                # ← 這裡改成「斜率」而非 RMS 幅度
+            ybin = _bin_rms(np.abs(phi_res[sel]), coh2[sel])  # ← 關鍵：用 RMS，而不是局部斜率
             fmid = np.sqrt(flo * fhi)
             kbin = 2.0 * np.pi * fmid / C_LIGHT
             wbin = float(np.sum(coh2[sel]))
@@ -186,7 +181,7 @@ def phasefit_points(
         pair_bins[(a,b)] = {"k": np.array(k_list), "y": np.array(y_list),
                             "w": np.array(w_list), "fmid": np.array(fmid_list)}
 
-    # 對每個 IFO，把它參與的所有 pair 在同一 bin 聚合（以權重加權）
+    # 聚合到單一 IFO（權重加總）
     rows = []
     for ifo in ifos:
         for ib in range(n_bins):
@@ -198,14 +193,18 @@ def phasefit_points(
                     continue
                 ys.append(yb); ws.append(wb); ks.append(kb); fs.append(fm)
             if len(ys) == 0: continue
-            y_agg = float(np.sum(np.asarray(ws)*np.asarray(ys)) / np.sum(ws))
-            k_agg = float(np.sum(np.asarray(ws)*np.asarray(ks)) / np.sum(ws))
-            f_agg = float(np.sum(np.asarray(ws)*np.asarray(fs)) / np.sum(ws))
 
-            # map 到標準 schema
-            delta_ct2 = max(y_agg, 1e-18)
+            ws = np.asarray(ws)
+            y_agg = float(np.sum(ws*np.asarray(ys)) / np.sum(ws))
+            k_agg = float(np.sum(ws*np.asarray(ks)) / np.sum(ws))
+            f_agg = float(np.sum(ws*np.asarray(fs)) / np.sum(ws))
+
+            # 映射回理論標度：delta_ct2 ~ y * k^2
+            delta_ct2 = max(y_agg * (k_agg**2), 1e-30)
+            # σ 僅反映 DOF（避免小 delta 帶來超大權重偏差）
             w_sum = float(np.sum(ws))
-            sigma = float(delta_ct2 / np.sqrt(w_sum + 1e-9))
+            sigma = float(1.0 / np.sqrt(w_sum + 1e-9))
+
             rows.append({"event": event, "ifo": ifo, "f_hz": f_agg, "k": k_agg,
                          "delta_ct2": delta_ct2, "sigma": sigma})
 
