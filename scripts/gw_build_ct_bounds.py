@@ -14,22 +14,14 @@ from uclgw.combine.aggregate import append_event_points
 C_LIGHT = 299792458.0
 
 def _ensure_standard_schema(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    相容老版欄位：若輸入含 y/w 或缺 f_hz，就補齊/改名成標準六欄。
-    標準欄位: ['event','ifo','f_hz','k','delta_ct2','sigma']
-    """
     df = df.copy()
     required = ["event","ifo","f_hz","k","delta_ct2","sigma"]
     if df.empty:
-        # 回傳「有欄位、零列」的表，避免後續崩潰；後續由 aggregate 決定是否併入
         return pd.DataFrame(columns=required)
-    # f_hz
     if "f_hz" not in df.columns and "k" in df.columns:
         df["f_hz"] = (df["k"].astype(float) * C_LIGHT) / (2.0*np.pi)
-    # delta_ct2
     if "delta_ct2" not in df.columns and "y" in df.columns:
         df["delta_ct2"] = df["y"].astype(float).clip(lower=1e-18)
-    # sigma：若缺就補 1.0 等權
     if "sigma" not in df.columns:
         df["sigma"] = 1.0
     keep = ["event","ifo","f_hz","k","delta_ct2","sigma"]
@@ -46,30 +38,26 @@ def main():
     ap.add_argument("--null", choices=["none", "timeshift"], default="none", help="Apply a laboratory null.")
     ap.add_argument("--label", default="", help="Suffix for event name (e.g. OFF)")
 
-    # 轉給 phasefit_points 的頻域/相干度/邊界丟棄參數
-    ap.add_argument("--coh-min", type=float, default=0.7,
-                    help="coherence^2 threshold for per-bin local fit")
-    ap.add_argument("--coh-wide-min", type=float, default=0.80,
-                    help="coherence^2 threshold used ONLY for the wideband trend fit (L_eff)")
-    ap.add_argument("--coh-bin-min", type=float, default=0.80,
-                    help="mean coherence^2 requirement inside each bin")
-    ap.add_argument("--min-samples-per-bin", type=int, default=12,
-                    help="minimum Welch samples per frequency bin")
+    # phasefit 參數
+    ap.add_argument("--coh-min", type=float, default=0.7, help="coherence^2 threshold for per-bin local fit")
+    ap.add_argument("--coh-wide-min", type=float, default=0.80, help="coherence^2 threshold used ONLY for the wideband trend fit (L_eff)")
+    ap.add_argument("--coh-bin-min", type=float, default=0.80, help="mean coherence^2 requirement inside each bin")
+    ap.add_argument("--min-samples-per-bin", type=int, default=12, help="minimum Welch samples per frequency bin")
     ap.add_argument("--nperseg", type=int, default=8192, help="Welch FFT segment length")
     ap.add_argument("--noverlap", type=int, default=None, help="Welch overlap; default nperseg//2")
     ap.add_argument("--drop-edge-bins", type=int, default=0, help="Drop this many lowest & highest freq bins")
-    ap.add_argument("--min-bins-count", type=int, default=6,
-                    help="minimum surviving bins per IFO to keep that IFO")
-    ap.add_argument("--gate-sec", type=float, default=0.0,
-                    help="half-width (seconds) of event-centered time gate; 0 disables")
+    ap.add_argument("--min-bins-count", type=int, default=6, help="minimum surviving bins per IFO to keep that IFO")
+    ap.add_argument("--gate-sec", type=float, default=0.0, help="half-width (seconds) of event-centered time gate; 0 disables")
 
     args = ap.parse_args()
 
-    # 加上 label 的外顯事件名（用於輸出檔案與 CSV 的 event 欄位）
+    # 讀檔用的來源事件（永遠是原始參數）
+    source_event = args.event
+    # 輸出用的事件名（可帶 label）
     event = args.event if not args.label else f"{args.event}_{args.label}"
 
-    # (A) 網路延遲側寫（JSON）— 仍以原始事件做計算，但輸出檔名帶 label，方便對照
-    netrep = network_delay_bounds(event=args.event, work_dir=ROOT / "data/work/whitened")
+    # (A) 網路延遲側寫（檔名帶 label，計算仍用來源事件名即可）
+    netrep = network_delay_bounds(event=source_event, work_dir=ROOT / "data/work/whitened")
     (ROOT / "reports").mkdir(parents=True, exist_ok=True)
     (ROOT / f"reports/network_timing_{event}.json").write_text(json.dumps(netrep, indent=2))
     print(f"Wrote {ROOT}/reports/network_timing_{event}.json")
@@ -77,25 +65,26 @@ def main():
     # (B) 產出事件 csv
     if args.mode == "proxy-k2":
         df = proxy_k2_points(
-            event=event,                      # 帶入帶 label 的事件名
+            event=event,
             fmin=args.fmin, fmax=args.fmax, n_bins=args.n_bins,
             work_dir=ROOT / "data/work/whitened"
         )
     else:
         df = phasefit_points(
-            event=event,                      # 帶入帶 label 的事件名
+            event=event,                       # ← 輸出標籤（可含 _OFF）
+            source_event=source_event,         # ← 讀檔來源（永遠是原始事件名）
             fmin=args.fmin, fmax=args.fmax, n_bins=args.n_bins,
             work_dir=ROOT / "data/work/whitened",
             null_mode=args.null,
             nperseg=args.nperseg,
             noverlap=args.noverlap,
             coherence_min=args.coh_min,
-            coherence_wide_min=args.coh_wide_min,      # NEW：寬頻趨勢門檻
-            coherence_bin_min=args.coh_bin_min,        # NEW：bin 內平均 coh^2 門檻
+            coherence_wide_min=args.coh_wide_min,
+            coherence_bin_min=args.coh_bin_min,
             min_samples_per_bin=args.min_samples_per_bin,
             drop_edge_bins=args.drop_edge_bins,
             min_bins_count=args.min_bins_count,
-            gate_sec=args.gate_sec,                    # NEW：事件窗 gating
+            gate_sec=args.gate_sec,
         )
 
     df = _ensure_standard_schema(df)

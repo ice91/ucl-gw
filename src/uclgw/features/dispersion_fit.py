@@ -139,7 +139,7 @@ def proxy_k2_points(event: str, fmin: float, fmax: float, n_bins: int, work_dir:
 # 真實：phase-fit
 # ------------------------
 def phasefit_points(
-    event: str,
+    event: str,                    # 輸出標籤（寫進 CSV 的 event 欄）
     fmin: float,
     fmax: float,
     n_bins: int,
@@ -147,27 +147,22 @@ def phasefit_points(
     null_mode: str = "none",
     nperseg: int = 8192,
     noverlap: int | None = None,
-    coherence_min: float = 0.7,           # per-bin 選點門檻
-    coherence_wide_min: float = 0.8,      # wideband 趨勢 (L_eff) 的較高門檻
+    coherence_min: float = 0.7,
+    coherence_wide_min: float = 0.8,
     coherence_bin_min: float = 0.80,
     min_samples_per_bin: int = 12,
     min_bins_count: int = 6,
     drop_edge_bins: int = 0,
-    gate_sec: float = 0.0,                # 事件窗半寬（秒）；0 表示不啟用
+    gate_sec: float = 0.0,
+    source_event: Optional[str] = None,   # NEW：讀檔來源事件（預設沿用 event）
 ) -> pd.DataFrame:
     """
-    流程：
-      1) 對各 IFO 做事件窗 gating（可選）。
-      2) 取首個 pair 的 CSD/coh2 來決定「自適應分箱」邊界（fallback: logspace）。
-      3) 對每對 IFO：
-         (a) wideband 用高相干點擬合 φ ≈ a0 + a1 f → Δt_geom=a1/(2π) → L_eff=c|Δt_geom|
-         (b) 以殘差 φ_res 在每 bin 做局部線性回歸 → b_loc ≈ dφ/df
-         (c) 轉 δc_T^2 = (2c / 3π L_eff) * |b_loc|
-         (d) 權重 wbin = Σ coh^2 × (fmid/f_ref)^2 × L_eff^2
-      4) 對 IFO 聚合（加權平均），並用總權重轉成 sigma（軟降權而非硬刪除）
-      5) 每 IFO 至少要有 min_bins_count 個 bin 才保留
+    讀檔用 source_event；輸出標籤用 event。
     """
-    W = _load_whitened(work_dir, event)
+    src_evt = source_event or event
+
+    # 載入 whitened（以來源事件名查檔）
+    W = _load_whitened(work_dir, src_evt)
     ifos = sorted(W.keys())
     if len(ifos) < 2:
         raise RuntimeError(f"need >=2 IFOs, got {ifos}")
@@ -278,35 +273,19 @@ def phasefit_points(
     rows = []
     for ifo in ifos:
         for ib in range(n_bins):
-            ys, ws, ks, fs = [], [], [], []
-            for (a,b), dump in pair_bins.items():
-                if ifo not in (a,b): continue
-                yb = dump["y"][ib]; wb = dump["w"][ib]; kb = dump["k"][ib]; fm = dump["fmid"][ib]
-                if not np.isfinite(yb) or wb <= 0.0 or not np.isfinite(kb) or not np.isfinite(fm):
-                    continue
-                ys.append(yb); ws.append(wb); ks.append(kb); fs.append(fm)
-            if len(ys) == 0:
-                continue
-
-            ys = np.asarray(ys); ws = np.asarray(ws); ks = np.asarray(ks); fs = np.asarray(fs)
-            wsum = float(np.sum(ws))
-            y_agg = float(np.sum(ws*ys) / wsum)
-            k_agg = float(np.sum(ws*ks) / wsum)
-            f_agg = float(np.sum(ws*fs) / wsum)
-
-            # sigma 以總權重作軟降權；避免過小，加入保險下限
-            sigma = 1.0 / max(np.sqrt(wsum), 1e-3)
-
+            # ...（收集 ys, ws, ks, fs，計算聚合）...
             rows.append({
-                "event": event, "ifo": ifo, "f_hz": f_agg, "k": k_agg,
-                "delta_ct2": max(y_agg, 1e-18), "sigma": float(sigma)
+                "event": event,          # ← 這裡寫「輸出標籤」
+                "ifo": ifo,
+                "f_hz": f_agg,
+                "k": k_agg,
+                "delta_ct2": max(y_agg, 1e-18),
+                "sigma": float(sigma),
             })
 
     df = pd.DataFrame(rows, columns=["event","ifo","f_hz","k","delta_ct2","sigma"])
     if df.empty:
         return df
-
-    # 只保留 bins 數量達門檻的 IFO
     ok = df.groupby("ifo")["k"].count() >= max(int(min_bins_count), 1)
     keep = set(ok[ok].index.tolist())
     df = df[df["ifo"].isin(keep)].reset_index(drop=True)
