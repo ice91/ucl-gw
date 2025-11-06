@@ -1,86 +1,74 @@
 # scripts/slope2_perifo.py
-# --- add project src to path ---
-import sys
+import sys, argparse, json
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(ROOT / "src"))
-# --------------------------------
 
-import argparse, json, numpy as np
 import pandas as pd
-from uclgw.eval.slopefit import load_ct, do_fit, _read_profile_window
+from uclgw.eval.slopefit import load_ct, do_fit
 
-EPS_FLOOR = 1e-14
+def _get_intercept_any(r):
+    if hasattr(r, "intercept_log10"): return float(r.intercept_log10)
+    if hasattr(r, "intercept"): return float(r.intercept)
+    return None
 
-def _sanitize_df(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    # 防 OFF/NULL 出現 0/負值導致 log 無效
-    if "delta_ct2" in df.columns:
-        df["delta_ct2"] = np.abs(df["delta_ct2"]).clip(lower=EPS_FLOOR)
-    return df
+def _get_n_used(r, fallback_len):
+    for attr in ("mask_count","n_points","n"):
+        v = getattr(r, attr, None)
+        if v is not None: return int(v)
+    return int(fallback_len)
 
-def _finite_in_window(df: pd.DataFrame, kmin: float, kmax: float) -> pd.DataFrame:
-    m = np.isfinite(df["k"].values) & np.isfinite(df["delta_ct2"].values)
-    m &= (df["k"].values >= kmin) & (df["k"].values <= kmax)
-    return df[m].copy()
+def _get_window_k(r):
+    wk = getattr(r, "window_k", None)
+    if isinstance(wk, (list, tuple)) and len(wk) == 2:
+        try: return [float(wk[0]), float(wk[1])]
+        except Exception: return None
+    return None
 
 def main():
-    ap = argparse.ArgumentParser(description="Per-IFO slope2 fit per event.")
+    ap = argparse.ArgumentParser(description="Per-IFO slope2 fit per event")
     ap.add_argument("--data", default="data/ct/ct_bounds.csv")
-    ap.add_argument("--profile", default="configs/profiles/lvk_o3.yaml")
+    ap.add_argument("--profile", default=None)
     ap.add_argument("--event", default=None)
     ap.add_argument("--method", default="wls", choices=["wls","huber"])
     args = ap.parse_args()
 
-    kmin, kmax = _read_profile_window(Path(args.profile))
     df = load_ct(Path(args.data))
     if args.event:
         df = df[df["event"] == args.event]
-    if df.empty:
-        print("No rows for the selected event/data.")
-        return
 
-    df = _sanitize_df(df)
-    df = _finite_in_window(df, kmin, kmax)
-    if df.empty:
-        print("No valid rows after finite filtering.")
-        return
-
-    events = sorted(df["event"].unique())
     by_event = {}
-
-    for ev in events:
+    for ev in sorted(df["event"].unique()):
         dfe = df[df["event"] == ev].copy()
         if dfe.empty: continue
 
-        # 合併（全 IFO）
-        tmp_all = Path("data/ct/_tmp_real.csv")
+        tmp_all = Path("data/ct/_tmp_all.csv")
         dfe.to_csv(tmp_all, index=False)
-        r_all = do_fit(tmp_all, Path(args.profile), method=args.method)
+        r_all = do_fit(tmp_all, Path(args.profile) if args.profile else None, method=args.method)
 
         perifo = {}
         for ifo in sorted(dfe["ifo"].unique()):
             dfi = dfe[dfe["ifo"] == ifo].copy()
             if dfi.empty: continue
-            tmp_1 = Path("data/ct/_tmp_real.csv")
+            tmp_1 = Path("data/ct/_tmp_1.csv")
             dfi.to_csv(tmp_1, index=False)
-            r = do_fit(tmp_1, Path(args.profile), method=args.method)
+            r = do_fit(tmp_1, Path(args.profile) if args.profile else None, method=args.method)
             perifo[ifo] = {
                 "slope": float(r.slope),
-                "intercept_log10": float(r.intercept),
-                "n": int(getattr(r, "mask_count", len(dfi))),
+                "intercept_log10": _get_intercept_any(r),
+                "n": _get_n_used(r, len(dfi)),
                 "method": args.method,
-                "window_k": [float(kmin), float(kmax)]
+                "window_k": _get_window_k(r)
             }
 
         by_event[ev] = {
             "per_ifo": perifo,
             "combined": {
                 "slope": float(r_all.slope),
-                "intercept_log10": float(r_all.intercept),
-                "n": int(getattr(r_all, "mask_count", len(dfe))),
+                "intercept_log10": _get_intercept_any(r_all),
+                "n": _get_n_used(r_all, len(dfe)),
                 "method": args.method,
-                "window_k": [float(kmin), float(kmax)]
+                "window_k": _get_window_k(r_all)
             }
         }
 
