@@ -87,21 +87,21 @@ def main():
         )
 
     df = _ensure_standard_schema(df)
-
-    out_dir = ROOT / "data/ct/events"
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = ROOT / "data/ct/events"; out_dir.mkdir(parents=True, exist_ok=True)
     out_event = out_dir / f"{event}_ct_bounds.csv"
     df.to_csv(out_event, index=False)
     print(f"Wrote {out_event} with {len(df)} rows")
 
-    # (C) 彙整（注意：如為 OFF/null，建議不要併入主總表；視你的流程決定）
     if args.aggregate:
-        summary = append_event_points(
-            out_event,
-            out_csv=ROOT / "data/ct/ct_bounds.csv",
-            report_path=ROOT / "reports/aggregate_summary.json"
-        )
-        print(f"Updated {summary.out_csv} (events={summary.n_events}, rows={summary.n_rows})")
+        if df.empty:
+            print("No bins survived; skip aggregate to avoid empty-event issues.")
+        else:
+            summary = append_event_points(
+                out_event,
+                out_csv=ROOT / "data/ct/ct_bounds.csv",
+                report_path=ROOT / "reports/aggregate_summary.json"
+            )
+            print(f"Updated {summary.out_csv} (events={summary.n_events}, rows={summary.n_rows})")
 
 if __name__ == "__main__":
     main()
