@@ -1,4 +1,4 @@
-.PHONY: env repro-min baselines clean slope2 qa package ci gw-fetch gw-prepare gw-all
+.PHONY: env repro-min baselines clean slope2 qa package ci gw-fetch gw-prepare gw-all scout bbh190412 bbh190814 bbh150914 bns170817_long run-bbh190412 run-bns170817
 
 VENV := .venv
 PY   := $(VENV)/bin/python
@@ -95,6 +95,53 @@ null-signflip:
 
 # 強化版一鍵：先建 primary 事件表，再做一套 QA+Null
 qa-plus2: phase-fit-primary slope2 perifo jackknife robustness null-block null-signflip
+
+# 事件相干偵查（避免盲調）
+scout:
+	$(PY) -m scripts.coherence_scout --event $(EVENT) --fmin 60 --fmax 300 --nperseg 4096 --noverlap 3072 --gate-sec 0
+
+# 下載＋前處理（真實資料）
+bbh190412:
+	$(MAKE) gw-fetch-real EVENT=GW190412 IFOS=H1,L1,V1 DURATION=32 FS=4096
+	$(MAKE) gw-prepare    EVENT=GW190412 NPERSEG=8192 NOVERLAP=4096 GATE_Z=5.0
+
+bbh190814:
+	$(MAKE) gw-fetch-real EVENT=GW190814 IFOS=H1,L1,V1 DURATION=32 FS=4096
+	$(MAKE) gw-prepare    EVENT=GW190814 NPERSEG=8192 NOVERLAP=4096 GATE_Z=5.0
+
+bbh150914:
+	$(MAKE) gw-fetch-real EVENT=GW150914 IFOS=H1,L1     DURATION=16 FS=4096
+	$(MAKE) gw-prepare    EVENT=GW150914 NPERSEG=4096 NOVERLAP=2048 GATE_Z=5.0
+
+# BNS：為了吃到前奏，拉長段長；之後 phase-fit 再用 gate-sec 決定實際視窗
+bns170817_long:
+	$(MAKE) gw-fetch-real EVENT=GW170817 IFOS=H1,L1,V1 DURATION=256 FS=4096
+	$(MAKE) gw-prepare    EVENT=GW170817 NPERSEG=8192 NOVERLAP=4096 GATE_Z=5.0
+
+# 一鍵範例：BBH190412（先 scout，拿到建議門檻後再跑 ON/OFF）
+run-bbh190412: bbh190412
+	$(PY) -m scripts.coherence_scout --event GW190412 --fmin 50 --fmax 300 --nperseg 1024 --noverlap 768 --gate-sec 1.0
+	# ↑ 看 reports/coherence_GW190412.json 的 RECOMMEND，再把數值帶進下面兩行
+	$(PY) -m scripts.gw_build_ct_bounds --event GW190412 --mode phase-fit --fmin 50 --fmax 300 --n-bins 8 \
+		--gate-sec 1.0 --nperseg 1024 --noverlap 768 --edges-mode logspace \
+		--coh-wide-min 0.25 --coh-min 0.00 --coh-bin-min 0.01 --min-samples-per-bin 2 --aggregate
+	$(PY) -m scripts.gw_build_ct_bounds --event GW190412 --mode phase-fit --fmin 50 --fmax 300 --n-bins 8 \
+		--gate-sec 1.0 --nperseg 1024 --noverlap 768 --edges-mode logspace \
+		--coh-wide-min 0.25 --coh-min 0.00 --coh-bin-min 0.01 --min-samples-per-bin 2 \
+		--null timeshift --label OFF --aggregate
+
+# 一鍵範例：BNS GW170817（長 gate 吃到前奏）
+run-bns170817: bns170817_long
+	$(PY) -m scripts.coherence_scout --event GW170817 --fmin 60 --fmax 300 --nperseg 4096 --noverlap 3072 --gate-sec 40.0
+	# ↑ 讀 RECOMMEND 後把數值帶入
+	$(PY) -m scripts.gw_build_ct_bounds --event GW170817 --mode phase-fit --fmin 60 --fmax 300 --n-bins 10 \
+		--gate-sec 40.0 --nperseg 4096 --noverlap 3072 --edges-mode logspace --drop-edge-bins 1 \
+		--coh-wide-min 0.20 --coh-min 0.00 --coh-bin-min 0.008 --min-samples-per-bin 3 --aggregate
+	$(PY) -m scripts.gw_build_ct_bounds --event GW170817 --mode phase-fit --fmin 60 --fmax 300 --n-bins 10 \
+		--gate-sec 40.0 --nperseg 4096 --noverlap 3072 --edges-mode logspace --drop-edge-bins 1 \
+		--coh-wide-min 0.20 --coh-min 0.00 --coh-bin-min 0.008 --min-samples-per-bin 3 \
+		--null timeshift --label OFF --aggregate
+
 
 package:
 	$(PY) -m scripts.package_manifest
