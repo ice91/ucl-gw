@@ -155,6 +155,8 @@ def phasefit_points(
     drop_edge_bins: int = 0,
     gate_sec: float = 0.0,
     source_event: Optional[str] = None,   # NEW：讀檔來源事件（預設沿用 event）
+    edges_mode: str = "adaptive",
+    coherence_edges_min: float | None = None,
 ) -> pd.DataFrame:
     """
     讀檔用 source_event；輸出標籤用 event。
@@ -210,7 +212,13 @@ def phasefit_points(
         yb0 = _timeshift(yb0, shift_samples=(len(yb0) // 4))
     f0, Cxy0, Sxx0, Syy0 = _welch_csd_xy(xa0, yb0, fs=fs_ref, nperseg=nperseg, noverlap=noverlap)
     coh20 = np.clip((np.abs(Cxy0)**2) / (np.maximum(Sxx0,1e-30)*np.maximum(Syy0,1e-30)), 0.0, 1.0)
-    edges = _adaptive_edges(f0, coh20, fmin, fmax, n_bins, coherence_min)
+    #edges = _adaptive_edges(f0, coh20, fmin, fmax, n_bins, coherence_min)
+    edges = None
+    if edges_mode == "logspace":
+        edges = _logspace_edges(fmin, fmax, n_bins)
+    else:
+        thr = coherence_edges_min if coherence_edges_min is not None else coherence_min
+        edges = _adaptive_edges(f0, coh20, fmin, fmax, n_bins, thr)
 
     pair_bins: Dict[tuple[str, str], Dict[str, np.ndarray]] = {}
 

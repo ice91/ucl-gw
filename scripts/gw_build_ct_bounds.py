@@ -48,6 +48,8 @@ def main():
     ap.add_argument("--drop-edge-bins", type=int, default=0, help="Drop this many lowest & highest freq bins")
     ap.add_argument("--min-bins-count", type=int, default=6, help="minimum surviving bins per IFO to keep that IFO")
     ap.add_argument("--gate-sec", type=float, default=0.0, help="half-width (seconds) of event-centered time gate; 0 disables")
+    ap.add_argument("--edges-mode", choices=["adaptive", "logspace"], default="adaptive")
+    ap.add_argument("--coh-min-edges", type=float, default=None, help="only for adaptive edges; default = use coh-min")
 
     args = ap.parse_args()
 
@@ -85,6 +87,8 @@ def main():
             drop_edge_bins=args.drop_edge_bins,
             min_bins_count=args.min_bins_count,
             gate_sec=args.gate_sec,
+            edges_mode=args.edges_mode,
+            coherence_edges_min=args.coh_min_edges,
         )
 
     df = _ensure_standard_schema(df)
