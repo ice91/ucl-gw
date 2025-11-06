@@ -273,14 +273,28 @@ def phasefit_points(
     rows = []
     for ifo in ifos:
         for ib in range(n_bins):
-            # ...（收集 ys, ws, ks, fs，計算聚合）...
+            ys, ws, ks, fs = [], [], [], []
+            for (a,b), dump in pair_bins.items():
+                if ifo not in (a,b): continue
+                yb = dump["y"][ib]; wb = dump["w"][ib]; kb = dump["k"][ib]; fm = dump["fmid"][ib]
+                if not np.isfinite(yb) or wb <= 0.0 or not np.isfinite(kb) or not np.isfinite(fm):
+                    continue
+                ys.append(yb); ws.append(wb); ks.append(kb); fs.append(fm)
+            if len(ys) == 0:
+                continue
+
+            ys = np.asarray(ys); ws = np.asarray(ws); ks = np.asarray(ks); fs = np.asarray(fs)
+            wsum = float(np.sum(ws))
+            y_agg = float(np.sum(ws*ys) / wsum)
+            k_agg = float(np.sum(ws*ks) / wsum)
+            f_agg = float(np.sum(ws*fs) / wsum)
+
+            # sigma 以總權重作軟降權；避免過小，加入保險下限
+            sigma = 1.0 / max(np.sqrt(wsum), 1e-3)
+
             rows.append({
-                "event": event,          # ← 這裡寫「輸出標籤」
-                "ifo": ifo,
-                "f_hz": f_agg,
-                "k": k_agg,
-                "delta_ct2": max(y_agg, 1e-18),
-                "sigma": float(sigma),
+                "event": event, "ifo": ifo, "f_hz": f_agg, "k": k_agg,
+                "delta_ct2": max(y_agg, 1e-18), "sigma": float(sigma)
             })
 
     df = pd.DataFrame(rows, columns=["event","ifo","f_hz","k","delta_ct2","sigma"])
