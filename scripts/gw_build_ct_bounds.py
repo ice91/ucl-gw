@@ -43,15 +43,19 @@ def main():
     ap.add_argument("--label", default="", help="Suffix for event name (e.g. OFF)")
 
     # 轉給 phasefit_points 的頻域/相干度/邊界丟棄參數
-    ap.add_argument("--coh-min", type=float, default=0.7, help="Coherence^2 threshold for in-band regression")
+    ap.add_argument("--coh-min", type=float, default=0.7, help="Coherence^2 threshold for wideband trend & in-bin points")
+    ap.add_argument("--coh-bin-min", type=float, default=0.80, help="Mean coherence^2 requirement inside each bin")
+    ap.add_argument("--min-samples-per-bin", type=int, default=12, help="Minimum Welch samples per freq bin")
     ap.add_argument("--nperseg", type=int, default=8192, help="Welch FFT segment length")
     ap.add_argument("--noverlap", type=int, default=None, help="Welch overlap; default nperseg//2")
     ap.add_argument("--drop-edge-bins", type=int, default=0, help="Drop this many lowest & highest freq bins")
 
     args = ap.parse_args()
+
+    # 加上 label 的外顯事件名（用於輸出檔案與 CSV 的 event 欄位）
     event = args.event if not args.label else f"{args.event}_{args.label}"
 
-    # (A) 網路延遲側寫（JSON）
+    # (A) 網路延遲側寫（JSON）— 仍以原始事件做計算，但輸出檔名帶 label，方便對照
     netrep = network_delay_bounds(event=args.event, work_dir=ROOT / "data/work/whitened")
     (ROOT / "reports").mkdir(parents=True, exist_ok=True)
     (ROOT / f"reports/network_timing_{event}.json").write_text(json.dumps(netrep, indent=2))
@@ -60,17 +64,21 @@ def main():
     # (B) 產出事件 csv
     if args.mode == "proxy-k2":
         df = proxy_k2_points(
-            event=args.event, fmin=args.fmin, fmax=args.fmax, n_bins=args.n_bins,
+            event=event,                      # ★ 重要：帶入帶 label 的事件名
+            fmin=args.fmin, fmax=args.fmax, n_bins=args.n_bins,
             work_dir=ROOT / "data/work/whitened"
         )
     else:
         df = phasefit_points(
-            event=args.event, fmin=args.fmin, fmax=args.fmax, n_bins=args.n_bins,
+            event=event,                      # ★ 重要：帶入帶 label 的事件名
+            fmin=args.fmin, fmax=args.fmax, n_bins=args.n_bins,
             work_dir=ROOT / "data/work/whitened",
             null_mode=args.null,
             nperseg=args.nperseg,
             noverlap=args.noverlap,
             coherence_min=args.coh_min,
+            coherence_bin_min=args.coh_bin_min,        # ★ 新增：bin 內平均 coh^2 門檻
+            min_samples_per_bin=args.min_samples_per_bin,  # ★ 新增：bin 內最少樣本數
             drop_edge_bins=args.drop_edge_bins,
         )
 
@@ -82,7 +90,7 @@ def main():
     df.to_csv(out_event, index=False)
     print(f"Wrote {out_event} with {len(df)} rows")
 
-    # (C) 彙整
+    # (C) 彙整（注意：如為 OFF/null，建議不要併入主總表；視你的流程決定）
     if args.aggregate:
         summary = append_event_points(
             out_event,

@@ -129,6 +129,8 @@ def phasefit_points(
     nperseg: int = 8192,
     noverlap: int | None = None,
     coherence_min: float = 0.7,
+    coherence_bin_min: float = 0.80,
+    min_samples_per_bin: int = 12,
     min_bins_count: int = 6,
     drop_edge_bins: int = 0,
 ) -> pd.DataFrame:
@@ -138,9 +140,11 @@ def phasefit_points(
       2) 在 [fmin,fmax] 以 coherence^2 權重做一次寬頻趨勢：φ ≈ a0 + a1 f
          → 幾何時延 Δt_geom = a1/(2π) → L_eff = c * |Δt_geom|
       3) 把殘差 φ_res = φ - (a0 + a1 f)，在每個頻帶做局部回歸得到 b_loc ≈ dφ/df
-      4) 以第一性原理關係：δc_T^2 = (c / 3π L_eff) * |b_loc|
+      4) 以第一性原理關係：δc_T^2 = (2c / 3π L_eff) * |b_loc|   ← 係數 ×2（校正）
       5) 對每個 IFO 把各 pair 的 δc_T^2 以權重聚合（預設權重 = Σ coh^2，
          亦乘上 (f_mid/f_ref)^2 與 L_eff^2 以穩健化）
+      6) 嚴格門檻：bin 內需同時滿足 (樣本數 ≥ min_samples_per_bin) 且 (平均 coh^2 ≥ coherence_bin_min)，
+         否則該 bin 直接丟棄（不做 fallback）。
     """
     W = _load_whitened(work_dir, event)
     ifos = sorted(W.keys())
@@ -158,7 +162,6 @@ def phasefit_points(
     edges = _logspace_edges(fmin, fmax, n_bins)
     f_ref = float(np.sqrt(fmin * fmax))  # 權重用參考頻率（幾何平均）
 
-    # 每對 IFO 的頻帶資料與 L_eff
     pair_bins: Dict[tuple[str, str], Dict[str, np.ndarray]] = {}
 
     for (a, b) in pairs:
@@ -174,16 +177,16 @@ def phasefit_points(
         # (1) 在目標頻帶做寬頻加權趨勢（估幾何時延）
         mband = (f >= fmin) & (f <= fmax) & (coh2 >= coherence_min)
         if not np.any(mband):
+            # 若沒有任何點達到 wideband 門檻，最後退而求其次用整段，以免 L_eff 無法估
             mband = (f >= fmin) & (f <= fmax)
         a0, a1 = _weighted_linfit(f[mband], phi[mband], coh2[mband])
-        # 幾何時延與有效基線長
         dt_geom = a1 / TWOPI                         # [s]，rad/Hz ÷ (2π)
         L_eff   = C_LIGHT * abs(dt_geom)             # [m]，取正值用於正規化與權重
 
         # (2) 去趨勢殘差
         phi_res = phi - (a0 + a1 * f)
 
-        # (3) 逐 bin 估 b_loc，並依 δc_T^2 = (c / 3π L_eff) * |b_loc| 轉成物理量
+        # (3) 逐 bin 估 b_loc，並依 δc_T^2 = (2c / 3π L_eff) * |b_loc| 轉成物理量
         k_list, y_list, w_list, fmid_list = [], [], [], []
         for i in range(n_bins):
             # 丟掉邊緣 bin（避免濾波/窗函數邊效應）
@@ -192,17 +195,18 @@ def phasefit_points(
 
             flo, fhi = edges[i], edges[i+1]
             sel = (f >= flo) & (f < fhi) & (coh2 >= coherence_min)
-            if np.sum(sel) < 3:
-                sel = (f >= flo) & (f < fhi)
-                if np.sum(sel) < 3:
-                    k_list.append(np.nan); y_list.append(np.nan); w_list.append(0.0); fmid_list.append(np.nan); continue
+            # ★ 嚴格門檻：bin 內樣本數 + 平均相干度，否則直接跳過（不再 fallback 到「全點」）
+            if np.sum(sel) < max(int(min_samples_per_bin), 1):
+                k_list.append(np.nan); y_list.append(np.nan); w_list.append(0.0); fmid_list.append(np.nan); continue
+            if float(np.mean(coh2[sel])) < float(coherence_bin_min):
+                k_list.append(np.nan); y_list.append(np.nan); w_list.append(0.0); fmid_list.append(np.nan); continue
 
             a_loc, b_loc = _weighted_linfit(f[sel], phi_res[sel], coh2[sel])  # b_loc ≈ dφ/df (rad/Hz)
             fmid = np.sqrt(flo * fhi)
             kbin = TWOPI * fmid / C_LIGHT
 
-            # 物理解釋：把 b_loc 轉為 δc_T^2（確保為正；常數因子不影響斜率=2 的檢驗）
-            delta_ct2 = (C_LIGHT / (3.0 * np.pi * max(L_eff, 1e-9))) * abs(b_loc)
+            # 物理解釋（校正 ×2；最後才取絕對值，避免正負互相抵銷）
+            delta_ct2 = (2.0 * C_LIGHT / (3.0 * np.pi * max(L_eff, 1e-9))) * abs(b_loc)
 
             # 權重：Σ coh^2 × (fmid/f_ref)^2 × L_eff^2（讓長基線與高頻更穩健）
             wbin = float(np.sum(coh2[sel])) * float((fmid / max(f_ref, 1e-6))**2) * float(L_eff**2)
@@ -218,7 +222,6 @@ def phasefit_points(
     # (4) IFO 聚合（權重加權平均）
     rows = []
     for ifo in ifos:
-        kept_bins = 0
         for ib in range(n_bins):
             ys, ws, ks, fs = [], [], [], []
             for (a,b), dump in pair_bins.items():
@@ -232,7 +235,6 @@ def phasefit_points(
             y_agg = float(np.sum(ws*ys) / np.sum(ws))
             k_agg = float(np.sum(ws*ks) / np.sum(ws))
             f_agg = float(np.sum(ws*fs) / np.sum(ws))
-            kept_bins += 1
 
             rows.append({
                 "event": event, "ifo": ifo, "f_hz": f_agg, "k": k_agg,
@@ -240,9 +242,10 @@ def phasefit_points(
             })
 
     df = pd.DataFrame(rows)
-    if df.empty: return df
+    if df.empty:
+        return df
     # 只保留 bins 數量達門檻的 IFO
-    ok = df.groupby("ifo")["k"].count() >= max(min_bins_count, 1)
+    ok = df.groupby("ifo")["k"].count() >= max(int(min_bins_count), 1)
     keep = set(ok[ok].index.tolist())
     df = df[df["ifo"].isin(keep)].reset_index(drop=True)
     return df
