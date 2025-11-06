@@ -41,10 +41,11 @@ def main():
     ap.add_argument("--aggregate", action="store_true")
     ap.add_argument("--null", choices=["none", "timeshift"], default="none", help="Apply a laboratory null.")
     ap.add_argument("--label", default="", help="Suffix for event name (e.g. OFF)")
-    # 新增：頻域與相干度參數轉給 phasefit_points
-    ap.add_argument("--coh-min", type=float, default=0.7, help="Coherence^2 threshold for in-band regression")
+    # 傳遞給 phasefit_points 的參數
+    ap.add_argument("--coh-min", type=float, default=0.85, help="Coherence^2 threshold for in-band regression")
     ap.add_argument("--nperseg", type=int, default=8192, help="Welch FFT segment length")
     ap.add_argument("--noverlap", type=int, default=None, help="Welch overlap; default nperseg//2")
+    ap.add_argument("--drop-edge-bins", type=int, default=2, help="Drop this many bins on each frequency edge (kept as NaN placeholders)")
     args = ap.parse_args()
 
     event = args.event if not args.label else f"{args.event}_{args.label}"
@@ -69,6 +70,7 @@ def main():
             nperseg=args.nperseg,
             noverlap=args.noverlap,
             coherence_min=args.coh_min,
+            drop_edge_bins=args.drop_edge_bins,
         )
 
     df = _ensure_standard_schema(df)

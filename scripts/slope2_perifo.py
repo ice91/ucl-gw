@@ -10,6 +10,23 @@ import argparse, json
 import pandas as pd
 from uclgw.eval.slopefit import load_ct, do_fit
 
+def _result_n_used(result, fallback_len: int) -> int:
+    n_used = getattr(result, "mask_count", None)
+    if n_used is None:
+        n_used = getattr(result, "n_points", None)
+    if n_used is None:
+        n_used = fallback_len
+    return int(n_used)
+
+def _result_window_k(result):
+    wk = getattr(result, "window_k", None)
+    if isinstance(wk, (list, tuple)):
+        try:
+            return list(map(float, wk))
+        except Exception:
+            return None
+    return None
+
 def main():
     ap = argparse.ArgumentParser(description="Per-IFO slope2 fit per event (WLS).")
     ap.add_argument("--data", default="data/ct/ct_bounds.csv")
@@ -36,13 +53,14 @@ def main():
             tmp_1 = Path("data/ct/_tmp_real.csv")
             dfi.to_csv(tmp_1, index=False)
             r = do_fit(tmp_1, Path(args.profile), method="wls")
+            n_used = _result_n_used(r, fallback_len=len(dfi))
             perifo[ifo] = {
                 "slope": float(r.slope),
                 "intercept": float(r.intercept),
-                "n": int(r.mask_count),
+                "n": n_used,
                 "method": "wls",
-                "mask_count": int(r.mask_count),
-                "window_k": list(map(float, r.window_k))
+                "mask_count": n_used,
+                "window_k": _result_window_k(r)
             }
 
         by_event[ev] = {
@@ -50,10 +68,10 @@ def main():
             "combined_wls": {
                 "slope": float(r_all.slope),
                 "intercept": float(r_all.intercept),
-                "n": int(r_all.mask_count),
+                "n": _result_n_used(r_all, fallback_len=len(dfe)),
                 "method": "wls",
-                "mask_count": int(r_all.mask_count),
-                "window_k": list(map(float, r_all.window_k))
+                "mask_count": _result_n_used(r_all, fallback_len=len(dfe)),
+                "window_k": _result_window_k(r_all)
             }
         }
 
