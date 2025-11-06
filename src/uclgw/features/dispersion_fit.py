@@ -12,7 +12,8 @@ TWOPI = 2.0 * np.pi
 # ------------------------
 # 工具：Welch 版 CSD/Coherence
 # ------------------------
-def _welch_csd_xy(x: np.ndarray, y: np.ndarray, fs: float, nperseg: int = 4096, noverlap: int | None = None):
+def _welch_csd_xy(x: np.ndarray, y: np.ndarray, fs: float,
+                  nperseg: int = 4096, noverlap: int | None = None):
     if noverlap is None:
         noverlap = nperseg // 2
     step = max(1, nperseg - noverlap)
@@ -78,6 +79,24 @@ def _logspace_edges(fmin: float, fmax: float, n_bins: int) -> np.ndarray:
     return np.logspace(np.log10(fmin), np.log10(fmax), n_bins + 1)
 
 
+def _adaptive_edges(f: np.ndarray, coh2: np.ndarray,
+                    fmin: float, fmax: float, n_bins: int, coh_min: float) -> np.ndarray:
+    """
+    依據通過 coh_min 門檻的頻點，做「等分位」分箱；若點數不足則退回 logspace。
+    """
+    mask = (f >= fmin) & (f <= fmax) & (coh2 >= coh_min)
+    f_ok = np.sort(f[mask])
+    if f_ok.size < (n_bins + 1):
+        return _logspace_edges(fmin, fmax, n_bins)
+    qs = np.linspace(0.0, 1.0, n_bins + 1)
+    edges = np.quantile(f_ok, qs)
+    # 保證嚴格遞增（遇到重複時微擾）
+    for i in range(1, edges.size):
+        if edges[i] <= edges[i-1]:
+            edges[i] = edges[i-1] + 1e-6
+    return edges
+
+
 def _detect_ifos(white_dir: Path, event: str) -> List[str]:
     ifos = []
     for p in sorted((white_dir).glob(f"{event}_*.npz")):
@@ -117,7 +136,7 @@ def proxy_k2_points(event: str, fmin: float, fmax: float, n_bins: int, work_dir:
     return pd.DataFrame(rows)
 
 # ------------------------
-# 真實：phase-fit（把每頻帶 b_loc 物理解釋為 δc_T^2；輸出標準欄位；sigma=1.0 等權）
+# 真實：phase-fit
 # ------------------------
 def phasefit_points(
     event: str,
@@ -128,29 +147,32 @@ def phasefit_points(
     null_mode: str = "none",
     nperseg: int = 8192,
     noverlap: int | None = None,
-    coherence_min: float = 0.7,
+    coherence_min: float = 0.7,           # per-bin 選點門檻
+    coherence_wide_min: float = 0.8,      # wideband 趨勢 (L_eff) 的較高門檻
     coherence_bin_min: float = 0.80,
     min_samples_per_bin: int = 12,
     min_bins_count: int = 6,
     drop_edge_bins: int = 0,
+    gate_sec: float = 0.0,                # 事件窗半寬（秒）；0 表示不啟用
 ) -> pd.DataFrame:
     """
-    步驟：
-      1) 針對每對 IFO 做 Welch CSD -> 相位 φ(f) 與 coherence^2(f)
-      2) 在 [fmin,fmax] 以 coherence^2 權重做一次寬頻趨勢：φ ≈ a0 + a1 f
-         → 幾何時延 Δt_geom = a1/(2π) → L_eff = c * |Δt_geom|
-      3) 把殘差 φ_res = φ - (a0 + a1 f)，在每個頻帶做局部回歸得到 b_loc ≈ dφ/df
-      4) 以第一性原理關係：δc_T^2 = (2c / 3π L_eff) * |b_loc|   ← 係數 ×2（校正）
-      5) 對每個 IFO 把各 pair 的 δc_T^2 以權重聚合（預設權重 = Σ coh^2，
-         亦乘上 (f_mid/f_ref)^2 與 L_eff^2 以穩健化）
-      6) 嚴格門檻：bin 內需同時滿足 (樣本數 ≥ min_samples_per_bin) 且 (平均 coh^2 ≥ coherence_bin_min)，
-         否則該 bin 直接丟棄（不做 fallback）。
+    流程：
+      1) 對各 IFO 做事件窗 gating（可選）。
+      2) 取首個 pair 的 CSD/coh2 來決定「自適應分箱」邊界（fallback: logspace）。
+      3) 對每對 IFO：
+         (a) wideband 用高相干點擬合 φ ≈ a0 + a1 f → Δt_geom=a1/(2π) → L_eff=c|Δt_geom|
+         (b) 以殘差 φ_res 在每 bin 做局部線性回歸 → b_loc ≈ dφ/df
+         (c) 轉 δc_T^2 = (2c / 3π L_eff) * |b_loc|
+         (d) 權重 wbin = Σ coh^2 × (fmid/f_ref)^2 × L_eff^2
+      4) 對 IFO 聚合（加權平均），並用總權重轉成 sigma（軟降權而非硬刪除）
+      5) 每 IFO 至少要有 min_bins_count 個 bin 才保留
     """
     W = _load_whitened(work_dir, event)
     ifos = sorted(W.keys())
     if len(ifos) < 2:
         raise RuntimeError(f"need >=2 IFOs, got {ifos}")
 
+    # 檢查取樣率一致
     fs_ref = None
     for ifo in ifos:
         fs = float(W[ifo]["meta"]["fs"])
@@ -158,9 +180,42 @@ def phasefit_points(
         if abs(fs - fs_ref) > 1e-9:
             raise RuntimeError("sampling rate mismatch across IFOs")
 
+    # 事件窗 gating（使用所有 IFO 的 t0_idx 做「交集」視窗，確保對齊）
+    if gate_sec and gate_sec > 0:
+        t0_list = []
+        for ifo in ifos:
+            w = np.asarray(W[ifo]["w"])
+            t0_idx = int(W[ifo]["meta"].get("t0_idx", int(np.argmax(np.abs(w)))))
+            t0_list.append(t0_idx)
+        rad = int(max(1, gate_sec * fs_ref))
+        lo_cands = []
+        hi_cands = []
+        for ifo in ifos:
+            w = np.asarray(W[ifo]["w"])
+            t0_idx = int(W[ifo]["meta"].get("t0_idx", int(np.argmax(np.abs(w)))))
+            lo_cands.append(max(0, t0_idx - rad))
+            hi_cands.append(min(w.size, t0_idx + rad))
+        lo = int(max(lo_cands)); hi = int(min(hi_cands))
+        # 需保證切出來的長度足以做 Welch
+        if hi - lo >= max(nperseg, 16):
+            for ifo in ifos:
+                w = np.asarray(W[ifo]["w"]); t = np.asarray(W[ifo]["t"])
+                W[ifo]["w"] = w[lo:hi]
+                W[ifo]["t"] = t[lo:hi]
+        # 若交集過窄就維持原樣（不 gating）
+
     pairs = [(ifos[i], ifos[j]) for i in range(len(ifos)) for j in range(i+1, len(ifos))]
-    edges = _logspace_edges(fmin, fmax, n_bins)
     f_ref = float(np.sqrt(fmin * fmax))  # 權重用參考頻率（幾何平均）
+
+    # 先用第一個 pair 估出自適應分箱邊界（若失敗會自動退回 logspace）
+    a0_ifo, b0_ifo = pairs[0]
+    xa0 = W[a0_ifo]["w"].copy()
+    yb0 = W[b0_ifo]["w"].copy()
+    if null_mode == "timeshift":
+        yb0 = _timeshift(yb0, shift_samples=(len(yb0) // 4))
+    f0, Cxy0, Sxx0, Syy0 = _welch_csd_xy(xa0, yb0, fs=fs_ref, nperseg=nperseg, noverlap=noverlap)
+    coh20 = np.clip((np.abs(Cxy0)**2) / (np.maximum(Sxx0,1e-30)*np.maximum(Syy0,1e-30)), 0.0, 1.0)
+    edges = _adaptive_edges(f0, coh20, fmin, fmax, n_bins, coherence_min)
 
     pair_bins: Dict[tuple[str, str], Dict[str, np.ndarray]] = {}
 
@@ -174,42 +229,42 @@ def phasefit_points(
         coh2 = np.clip((np.abs(Cxy)**2) / (np.maximum(Sxx,1e-30)*np.maximum(Syy,1e-30)), 0.0, 1.0)
         phi = np.unwrap(np.angle(Cxy))
 
-        # (1) 在目標頻帶做寬頻加權趨勢（估幾何時延）
-        mband = (f >= fmin) & (f <= fmax) & (coh2 >= coherence_min)
+        # (1) wideband 趨勢：只用較高相干點
+        mband = (f >= fmin) & (f <= fmax) & (coh2 >= coherence_wide_min)
         if not np.any(mband):
-            # 若沒有任何點達到 wideband 門檻，最後退而求其次用整段，以免 L_eff 無法估
+            # 若沒有任何點達到 wideband 門檻，退而求其次用整段（避免 L_eff 無法估）
             mband = (f >= fmin) & (f <= fmax)
-        a0, a1 = _weighted_linfit(f[mband], phi[mband], coh2[mband])
-        dt_geom = a1 / TWOPI                         # [s]，rad/Hz ÷ (2π)
-        L_eff   = C_LIGHT * abs(dt_geom)             # [m]，取正值用於正規化與權重
+        a0, a1 = _weighted_linfit(f[mband], phi[mband], coh2[mband] if np.any(mband) else np.ones_like(f[mband]))
+        dt_geom = a1 / TWOPI                         # [s]
+        L_eff   = C_LIGHT * abs(dt_geom)             # [m]
 
         # (2) 去趨勢殘差
         phi_res = phi - (a0 + a1 * f)
 
-        # (3) 逐 bin 估 b_loc，並依 δc_T^2 = (2c / 3π L_eff) * |b_loc| 轉成物理量
+        # (3) 逐 bin 估 b_loc → δc_T^2
         k_list, y_list, w_list, fmid_list = [], [], [], []
         for i in range(n_bins):
-            # 丟掉邊緣 bin（避免濾波/窗函數邊效應）
+            # 丟掉邊緣 bin（避免窗函數邊效應）
             if drop_edge_bins > 0 and (i < drop_edge_bins or i >= (n_bins - drop_edge_bins)):
                 k_list.append(np.nan); y_list.append(np.nan); w_list.append(0.0); fmid_list.append(np.nan); continue
 
-            flo, fhi = edges[i], edges[i+1]
+            flo, fhi = float(edges[i]), float(edges[i+1])
             sel = (f >= flo) & (f < fhi) & (coh2 >= coherence_min)
-            # ★ 嚴格門檻：bin 內樣本數 + 平均相干度，否則直接跳過（不再 fallback 到「全點」）
+            # 嚴格門檻：bin 內樣本數 + 平均 coh^2
             if np.sum(sel) < max(int(min_samples_per_bin), 1):
                 k_list.append(np.nan); y_list.append(np.nan); w_list.append(0.0); fmid_list.append(np.nan); continue
             if float(np.mean(coh2[sel])) < float(coherence_bin_min):
                 k_list.append(np.nan); y_list.append(np.nan); w_list.append(0.0); fmid_list.append(np.nan); continue
 
             a_loc, b_loc = _weighted_linfit(f[sel], phi_res[sel], coh2[sel])  # b_loc ≈ dφ/df (rad/Hz)
-            fmid = np.sqrt(flo * fhi)
-            kbin = TWOPI * fmid / C_LIGHT
+            fmid = float(np.sqrt(flo * fhi))
+            kbin = float(TWOPI * fmid / C_LIGHT)
 
             # 物理解釋（校正 ×2；最後才取絕對值，避免正負互相抵銷）
-            delta_ct2 = (2.0 * C_LIGHT / (3.0 * np.pi * max(L_eff, 1e-9))) * abs(b_loc)
+            delta_ct2 = float((2.0 * C_LIGHT / (3.0 * np.pi * max(L_eff, 1e-9))) * abs(b_loc))
 
             # 權重：Σ coh^2 × (fmid/f_ref)^2 × L_eff^2（讓長基線與高頻更穩健）
-            wbin = float(np.sum(coh2[sel])) * float((fmid / max(f_ref, 1e-6))**2) * float(L_eff**2)
+            wbin = float(np.sum(coh2[sel])) * float((fmid / max(f_ref, 1e-9))**2) * float(L_eff**2)
 
             k_list.append(kbin); y_list.append(delta_ct2); w_list.append(wbin); fmid_list.append(fmid)
 
@@ -219,7 +274,7 @@ def phasefit_points(
             "L_eff": float(L_eff)
         }
 
-    # (4) IFO 聚合（權重加權平均）
+    # (4) IFO 聚合（權重加權平均），並把總權重轉成 sigma（軟降權）
     rows = []
     for ifo in ifos:
         for ib in range(n_bins):
@@ -230,21 +285,27 @@ def phasefit_points(
                 if not np.isfinite(yb) or wb <= 0.0 or not np.isfinite(kb) or not np.isfinite(fm):
                     continue
                 ys.append(yb); ws.append(wb); ks.append(kb); fs.append(fm)
-            if len(ys) == 0: continue
+            if len(ys) == 0:
+                continue
+
             ys = np.asarray(ys); ws = np.asarray(ws); ks = np.asarray(ks); fs = np.asarray(fs)
-            y_agg = float(np.sum(ws*ys) / np.sum(ws))
-            k_agg = float(np.sum(ws*ks) / np.sum(ws))
-            f_agg = float(np.sum(ws*fs) / np.sum(ws))
+            wsum = float(np.sum(ws))
+            y_agg = float(np.sum(ws*ys) / wsum)
+            k_agg = float(np.sum(ws*ks) / wsum)
+            f_agg = float(np.sum(ws*fs) / wsum)
+
+            # sigma 以總權重作軟降權；避免過小，加入保險下限
+            sigma = 1.0 / max(np.sqrt(wsum), 1e-3)
 
             rows.append({
                 "event": event, "ifo": ifo, "f_hz": f_agg, "k": k_agg,
-                "delta_ct2": max(y_agg, 1e-18), "sigma": 1.0
+                "delta_ct2": max(y_agg, 1e-18), "sigma": float(sigma)
             })
 
-    #df = pd.DataFrame(rows)
     df = pd.DataFrame(rows, columns=["event","ifo","f_hz","k","delta_ct2","sigma"])
     if df.empty:
         return df
+
     # 只保留 bins 數量達門檻的 IFO
     ok = df.groupby("ifo")["k"].count() >= max(int(min_bins_count), 1)
     keep = set(ok[ok].index.tolist())

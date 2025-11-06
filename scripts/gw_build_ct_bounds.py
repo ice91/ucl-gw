@@ -29,7 +29,7 @@ def _ensure_standard_schema(df: pd.DataFrame) -> pd.DataFrame:
     # delta_ct2
     if "delta_ct2" not in df.columns and "y" in df.columns:
         df["delta_ct2"] = df["y"].astype(float).clip(lower=1e-18)
-    # sigma：等權（常數 1.0）
+    # sigma：若缺就補 1.0 等權
     if "sigma" not in df.columns:
         df["sigma"] = 1.0
     keep = ["event","ifo","f_hz","k","delta_ct2","sigma"]
@@ -47,13 +47,21 @@ def main():
     ap.add_argument("--label", default="", help="Suffix for event name (e.g. OFF)")
 
     # 轉給 phasefit_points 的頻域/相干度/邊界丟棄參數
-    ap.add_argument("--coh-min", type=float, default=0.7, help="Coherence^2 threshold for wideband trend & in-bin points")
-    ap.add_argument("--coh-bin-min", type=float, default=0.80, help="Mean coherence^2 requirement inside each bin")
-    ap.add_argument("--min-samples-per-bin", type=int, default=12, help="Minimum Welch samples per freq bin")
+    ap.add_argument("--coh-min", type=float, default=0.7,
+                    help="coherence^2 threshold for per-bin local fit")
+    ap.add_argument("--coh-wide-min", type=float, default=0.80,
+                    help="coherence^2 threshold used ONLY for the wideband trend fit (L_eff)")
+    ap.add_argument("--coh-bin-min", type=float, default=0.80,
+                    help="mean coherence^2 requirement inside each bin")
+    ap.add_argument("--min-samples-per-bin", type=int, default=12,
+                    help="minimum Welch samples per frequency bin")
     ap.add_argument("--nperseg", type=int, default=8192, help="Welch FFT segment length")
     ap.add_argument("--noverlap", type=int, default=None, help="Welch overlap; default nperseg//2")
     ap.add_argument("--drop-edge-bins", type=int, default=0, help="Drop this many lowest & highest freq bins")
-    ap.add_argument("--min-bins-count", type=int, default=6)
+    ap.add_argument("--min-bins-count", type=int, default=6,
+                    help="minimum surviving bins per IFO to keep that IFO")
+    ap.add_argument("--gate-sec", type=float, default=0.0,
+                    help="half-width (seconds) of event-centered time gate; 0 disables")
 
     args = ap.parse_args()
 
@@ -69,22 +77,25 @@ def main():
     # (B) 產出事件 csv
     if args.mode == "proxy-k2":
         df = proxy_k2_points(
-            event=event,                      # ★ 重要：帶入帶 label 的事件名
+            event=event,                      # 帶入帶 label 的事件名
             fmin=args.fmin, fmax=args.fmax, n_bins=args.n_bins,
             work_dir=ROOT / "data/work/whitened"
         )
     else:
         df = phasefit_points(
-            event=event,                      # ★ 重要：帶入帶 label 的事件名
+            event=event,                      # 帶入帶 label 的事件名
             fmin=args.fmin, fmax=args.fmax, n_bins=args.n_bins,
             work_dir=ROOT / "data/work/whitened",
             null_mode=args.null,
             nperseg=args.nperseg,
             noverlap=args.noverlap,
             coherence_min=args.coh_min,
-            coherence_bin_min=args.coh_bin_min,        # ★ 新增：bin 內平均 coh^2 門檻
-            min_samples_per_bin=args.min_samples_per_bin,  # ★ 新增：bin 內最少樣本數
+            coherence_wide_min=args.coh_wide_min,      # NEW：寬頻趨勢門檻
+            coherence_bin_min=args.coh_bin_min,        # NEW：bin 內平均 coh^2 門檻
+            min_samples_per_bin=args.min_samples_per_bin,
             drop_edge_bins=args.drop_edge_bins,
+            min_bins_count=args.min_bins_count,
+            gate_sec=args.gate_sec,                    # NEW：事件窗 gating
         )
 
     df = _ensure_standard_schema(df)
