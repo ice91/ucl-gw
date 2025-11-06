@@ -241,7 +241,8 @@ def phasefit_points(
                 "delta_ct2": max(y_agg, 1e-18), "sigma": 1.0
             })
 
-    df = pd.DataFrame(rows)
+    #df = pd.DataFrame(rows)
+    df = pd.DataFrame(rows, columns=["event","ifo","f_hz","k","delta_ct2","sigma"])
     if df.empty:
         return df
     # 只保留 bins 數量達門檻的 IFO

@@ -19,6 +19,10 @@ def _ensure_standard_schema(df: pd.DataFrame) -> pd.DataFrame:
     標準欄位: ['event','ifo','f_hz','k','delta_ct2','sigma']
     """
     df = df.copy()
+    required = ["event","ifo","f_hz","k","delta_ct2","sigma"]
+    if df.empty:
+        # 回傳「有欄位、零列」的表，避免後續崩潰；後續由 aggregate 決定是否併入
+        return pd.DataFrame(columns=required)
     # f_hz
     if "f_hz" not in df.columns and "k" in df.columns:
         df["f_hz"] = (df["k"].astype(float) * C_LIGHT) / (2.0*np.pi)
