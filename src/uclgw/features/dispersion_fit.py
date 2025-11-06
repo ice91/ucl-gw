@@ -52,11 +52,13 @@ def _welch_csd_xy(x: np.ndarray, y: np.ndarray, fs: float, nperseg: int = 4096, 
     f = np.fft.rfftfreq(nperseg, d=1.0/fs)
     return f, Cxy_avg, Sxx_avg, Syy_avg
 
+
 def _timeshift(a: np.ndarray, shift_samples: int) -> np.ndarray:
     if shift_samples == 0 or a.size == 0: return a.copy()
     s = shift_samples % a.size
     if s == 0: return a.copy()
     return np.concatenate([a[-s:], a[:-s]])
+
 
 def _weighted_linfit(x: np.ndarray, y: np.ndarray, w: np.ndarray) -> tuple[float, float]:
     w = np.asarray(w); x = np.asarray(x); y = np.asarray(y)
@@ -67,13 +69,10 @@ def _weighted_linfit(x: np.ndarray, y: np.ndarray, w: np.ndarray) -> tuple[float
     a0, a1 = beta[0], beta[1]
     return float(a0), float(a1)
 
+
 def _logspace_edges(fmin: float, fmax: float, n_bins: int) -> np.ndarray:
     return np.logspace(np.log10(fmin), np.log10(fmax), n_bins + 1)
 
-def _bin_rms(values: np.ndarray, weights: np.ndarray) -> float:
-    w = np.maximum(np.asarray(weights), 0.0)
-    if values.size == 0 or np.sum(w) <= 0: return np.nan
-    return float(np.sqrt(np.sum(w * (values**2)) / np.sum(w)))
 
 def _detect_ifos(white_dir: Path, event: str) -> List[str]:
     ifos = []
@@ -81,6 +80,7 @@ def _detect_ifos(white_dir: Path, event: str) -> List[str]:
         tag = p.stem.split("_")[-1]
         ifos.append(tag)
     return sorted(list(set(ifos)))
+
 
 def _load_whitened(work_dir: Path, event: str) -> Dict[str, Dict]:
     d: Dict[str, Dict] = {}
@@ -94,7 +94,7 @@ def _load_whitened(work_dir: Path, event: str) -> Dict[str, Dict]:
     return d
 
 # ------------------------
-# 代理：proxy-k2（測試用）
+# 代理：proxy-k2（輸出標準欄位；sigma=1.0 等權）
 # ------------------------
 def proxy_k2_points(event: str, fmin: float, fmax: float, n_bins: int, work_dir: Path) -> pd.DataFrame:
     ifos = _detect_ifos(work_dir, event)
@@ -105,14 +105,15 @@ def proxy_k2_points(event: str, fmin: float, fmax: float, n_bins: int, work_dir:
             flo, fhi = edges[i], edges[i+1]
             fmid = np.sqrt(flo * fhi)
             k = 2.0 * np.pi * fmid / C_LIGHT
-            delta_ct2 = (k**2)                    # 讓斜率=2 的代理量
-            sigma = 0.1 * max(delta_ct2, 1e-18)   # 小誤差，隨量級縮放
-            rows.append({"event": event, "ifo": ifo, "f_hz": fmid, "k": k,
-                         "delta_ct2": float(delta_ct2), "sigma": float(sigma)})
+            delta_ct2 = (k**2)  # 期望斜率=2 的代理量
+            rows.append({
+                "event": event, "ifo": ifo, "f_hz": fmid, "k": k,
+                "delta_ct2": float(delta_ct2), "sigma": 1.0  # 等權
+            })
     return pd.DataFrame(rows)
 
 # ------------------------
-# 真實：phase-fit（用相位殘差 RMS 作 proxy，並映射回 k^2 標度）
+# 真實：phase-fit（每頻帶回歸 |dφ/df|；輸出標準欄位；sigma=1.0 等權）
 # ------------------------
 def phasefit_points(
     event: str,
@@ -123,7 +124,7 @@ def phasefit_points(
     null_mode: str = "none",
     nperseg: int = 8192,
     noverlap: int | None = None,
-    coherence_min: float = 0.6,
+    coherence_min: float = 0.7,
     min_bins_count: int = 6,
 ) -> pd.DataFrame:
 
@@ -140,9 +141,8 @@ def phasefit_points(
             raise RuntimeError("sampling rate mismatch across IFOs")
 
     pairs = [(ifos[i], ifos[j]) for i in range(len(ifos)) for j in range(i+1, len(ifos))]
-    edges = _logspace_edges(fmin, fmax, n_bins)
-
     pair_bins: Dict[tuple[str, str], Dict[str, np.ndarray]] = {}
+    edges = _logspace_edges(fmin, fmax, n_bins)
 
     for (a, b) in pairs:
         xa = W[a]["w"].copy()
@@ -154,14 +154,14 @@ def phasefit_points(
         coh2 = np.clip((np.abs(Cxy)**2) / (np.maximum(Sxx,1e-30)*np.maximum(Syy,1e-30)), 0.0, 1.0)
         phi = np.unwrap(np.angle(Cxy))
 
-        # 一次性去趨勢（扣掉跨站時延）
+        # 整段去趨勢（校正時延）
         mband = (f >= fmin) & (f <= fmax) & (coh2 >= coherence_min)
         if not np.any(mband):
             mband = (f >= fmin) & (f <= fmax)
         a0, a1 = _weighted_linfit(f[mband], phi[mband], coh2[mband])
         phi_res = phi - (a0 + a1 * f)
 
-        # 逐 bin 做加權 RMS（若門檻下樣本不足，退到只看頻帶）
+        # 逐 bin 估 |dφ/df|
         k_list, y_list, w_list, fmid_list = [], [], [], []
         for i in range(n_bins):
             flo, fhi = edges[i], edges[i+1]
@@ -171,7 +171,8 @@ def phasefit_points(
                 if np.sum(sel) < 3:
                     k_list.append(np.nan); y_list.append(np.nan); w_list.append(0.0); fmid_list.append(np.nan); continue
 
-            ybin = _bin_rms(np.abs(phi_res[sel]), coh2[sel])  # ← 關鍵：用 RMS，而不是局部斜率
+            a_loc, b_loc = _weighted_linfit(f[sel], phi_res[sel], coh2[sel])  # b_loc ≈ dφ/df
+            ybin = abs(b_loc)
             fmid = np.sqrt(flo * fhi)
             kbin = 2.0 * np.pi * fmid / C_LIGHT
             wbin = float(np.sum(coh2[sel]))
@@ -181,7 +182,7 @@ def phasefit_points(
         pair_bins[(a,b)] = {"k": np.array(k_list), "y": np.array(y_list),
                             "w": np.array(w_list), "fmid": np.array(fmid_list)}
 
-    # 聚合到單一 IFO（權重加總）
+    # IFO 聚合（權重加權平均）
     rows = []
     for ifo in ifos:
         for ib in range(n_bins):
@@ -193,20 +194,16 @@ def phasefit_points(
                     continue
                 ys.append(yb); ws.append(wb); ks.append(kb); fs.append(fm)
             if len(ys) == 0: continue
+            ys = np.asarray(ys); ws = np.asarray(ws); ks = np.asarray(ks); fs = np.asarray(fs)
+            y_agg = float(np.sum(ws*ys) / np.sum(ws))
+            k_agg = float(np.sum(ws*ks) / np.sum(ws))
+            f_agg = float(np.sum(ws*fs) / np.sum(ws))
 
-            ws = np.asarray(ws)
-            y_agg = float(np.sum(ws*np.asarray(ys)) / np.sum(ws))
-            k_agg = float(np.sum(ws*np.asarray(ks)) / np.sum(ws))
-            f_agg = float(np.sum(ws*np.asarray(fs)) / np.sum(ws))
-
-            # 映射回理論標度：delta_ct2 ~ y * k^2
-            delta_ct2 = max(y_agg * (k_agg**2), 1e-30)
-            # σ 僅反映 DOF（避免小 delta 帶來超大權重偏差）
-            w_sum = float(np.sum(ws))
-            sigma = float(1.0 / np.sqrt(w_sum + 1e-9))
-
-            rows.append({"event": event, "ifo": ifo, "f_hz": f_agg, "k": k_agg,
-                         "delta_ct2": delta_ct2, "sigma": sigma})
+            # 映射到標準 schema：delta_ct2 := y_agg（斜率由資料自行決定），sigma 等權。
+            rows.append({
+                "event": event, "ifo": ifo, "f_hz": f_agg, "k": k_agg,
+                "delta_ct2": max(y_agg, 1e-18), "sigma": 1.0
+            })
 
     df = pd.DataFrame(rows)
     if df.empty: return df

@@ -1,10 +1,15 @@
 # scripts/slope2_jackknife.py
-import argparse, json, random
+# --- add project src to path ---
+import sys
 from pathlib import Path
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.append(str(ROOT / "src"))
+# --------------------------------
+
+import argparse, json
 import numpy as np
 import pandas as pd
 import yaml
-
 from uclgw.eval.slopefit import load_ct, do_fit
 
 def _read_profile_window(profile_path: Path) -> tuple[float, float] | None:
@@ -28,12 +33,9 @@ def main():
     ap = argparse.ArgumentParser(description="Jackknife/Bootstrap uncertainty for slope2 (single event).")
     ap.add_argument("--data", default="data/ct/ct_bounds.csv")
     ap.add_argument("--profile", default="configs/profiles/lvk_o3.yaml")
-    ap.add_argument("--event", default=None, help="Target event (required for single-event mode)")
+    ap.add_argument("--event", required=True, help="Target event (required for single-event mode)")
     ap.add_argument("--n-bootstrap", type=int, default=400)
     args = ap.parse_args()
-
-    if args.event is None:
-        raise SystemExit("--event is required for jackknife")
 
     df = load_ct(Path(args.data))
     df = df[df["event"] == args.event].copy()

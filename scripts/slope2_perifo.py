@@ -1,8 +1,13 @@
 # scripts/slope2_perifo.py
-import argparse, json
+# --- add project src to path ---
+import sys
 from pathlib import Path
-import pandas as pd
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.append(str(ROOT / "src"))
+# --------------------------------
 
+import argparse, json
+import pandas as pd
 from uclgw.eval.slopefit import load_ct, do_fit
 
 def main():
