@@ -53,6 +53,7 @@ def main():
     ap.add_argument("--nperseg", type=int, default=8192, help="Welch FFT segment length")
     ap.add_argument("--noverlap", type=int, default=None, help="Welch overlap; default nperseg//2")
     ap.add_argument("--drop-edge-bins", type=int, default=0, help="Drop this many lowest & highest freq bins")
+    ap.add_argument("--min-bins-count", type=int, default=6)
 
     args = ap.parse_args()
 
