@@ -53,18 +53,18 @@ def main():
 
     args = ap.parse_args()
 
-    # 讀檔用的來源事件（永遠是原始參數）
     source_event = args.event
-    # 輸出用的事件名（可帶 label）
     event = args.event if not args.label else f"{args.event}_{args.label}"
 
-    # (A) 網路延遲側寫（檔名帶 label，計算仍用來源事件名即可）
+    # 填補 edges 門檻預設
+    if args.coh_min_edges is None:
+        args.coh_min_edges = args.coh_min
+
     netrep = network_delay_bounds(event=source_event, work_dir=ROOT / "data/work/whitened")
     (ROOT / "reports").mkdir(parents=True, exist_ok=True)
     (ROOT / f"reports/network_timing_{event}.json").write_text(json.dumps(netrep, indent=2))
     print(f"Wrote {ROOT}/reports/network_timing_{event}.json")
 
-    # (B) 產出事件 csv
     if args.mode == "proxy-k2":
         df = proxy_k2_points(
             event=event,
@@ -73,8 +73,8 @@ def main():
         )
     else:
         df = phasefit_points(
-            event=event,                       # ← 輸出標籤（可含 _OFF）
-            source_event=source_event,         # ← 讀檔來源（永遠是原始事件名）
+            event=event,
+            source_event=source_event,
             fmin=args.fmin, fmax=args.fmax, n_bins=args.n_bins,
             work_dir=ROOT / "data/work/whitened",
             null_mode=args.null,

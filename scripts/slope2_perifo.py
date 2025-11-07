@@ -1,10 +1,12 @@
 # scripts/slope2_perifo.py
 import sys, argparse, json
 from pathlib import Path
+import numpy as np
+import pandas as pd
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(ROOT / "src"))
 
-import pandas as pd
 from uclgw.eval.slopefit import load_ct, do_fit
 
 def _get_intercept_any(r):
@@ -25,24 +27,94 @@ def _get_window_k(r):
         except Exception: return None
     return None
 
+def _finite_mask(df: pd.DataFrame) -> pd.Series:
+    cols = [c for c in ["k","delta_ct2","sigma"] if c in df.columns]
+    m = np.isfinite(df[cols]).all(axis=1)
+    return m
+
+def _preclean(df: pd.DataFrame, sigma_q_lo: float, sigma_q_hi: float,
+              zmax: float, ct2_q_hi: float) -> pd.DataFrame:
+    df = df[_finite_mask(df)].copy()
+    if df.empty: return df
+    # sigma 量化截尾
+    lo = df["sigma"].quantile(sigma_q_lo) if "sigma" in df else None
+    hi = df["sigma"].quantile(sigma_q_hi) if "sigma" in df else None
+    ms = np.ones(len(df), dtype=bool)
+    if lo is not None and hi is not None:
+        ms = (df["sigma"] >= lo) & (df["sigma"] <= hi)
+    # log10(delta_ct2) z-score
+    logy = np.log10(df["delta_ct2"].clip(lower=1e-18))
+    mu, sd = np.mean(logy), np.std(logy, ddof=1)
+    mz = np.ones(len(df), dtype=bool) if not np.isfinite(sd) or sd == 0 \
+        else (np.abs((logy - mu) / sd) <= zmax)
+    # 上尾去極端（原尺度）
+    qhi = df["delta_ct2"].quantile(ct2_q_hi)
+    mt = df["delta_ct2"] <= max(float(qhi), 1e-18)
+    m = ms & mz & mt
+    return df[m].copy()
+
+def _apply_window(df: pd.DataFrame, window_k):
+    if window_k and len(window_k) == 2:
+        kmin, kmax = float(window_k[0]), float(window_k[1])
+        df = df[(df["k"] >= kmin) & (df["k"] <= kmax)].copy()
+    return df
+
+def _read_window_from_profile(profile_path):
+    if not profile_path: return None
+    try:
+        import yaml, numpy as _np
+        cfg = yaml.safe_load(Path(profile_path).read_text())
+        if isinstance(cfg, dict):
+            if "window_k" in cfg and isinstance(cfg["window_k"], (list, tuple)) and len(cfg["window_k"])==2:
+                return [float(cfg["window_k"][0]), float(cfg["window_k"][1])]
+            if "fmin" in cfg and "fmax" in cfg:
+                c = 299792458.0
+                kmin = 2*_np.pi*float(cfg["fmin"])/c
+                kmax = 2*_np.pi*float(cfg["fmax"])/c
+                return [float(kmin), float(kmax)]
+    except Exception:
+        pass
+    return None
+
 def main():
-    ap = argparse.ArgumentParser(description="Per-IFO slope2 fit per event")
+    ap = argparse.ArgumentParser(description="Per-IFO slope2 fit per event (with optional preclean & uniform-weight)")
     ap.add_argument("--data", default="data/ct/ct_bounds.csv")
     ap.add_argument("--profile", default=None)
     ap.add_argument("--event", default=None)
     ap.add_argument("--method", default="wls", choices=["wls","huber"])
+    ap.add_argument("--preclean", action="store_true", help="Enable minimal robust cleaning")
+    ap.add_argument("--sigma-quantiles", default="0.01,0.99", help="lo,hi for sigma trimming")
+    ap.add_argument("--zmax", type=float, default=3.5, help="Z-score threshold on log10(delta_ct2)")
+    ap.add_argument("--ct2-q-hi", type=float, default=0.99, help="Upper-tail quantile for delta_ct2")
+    ap.add_argument("--uniform-weight", action="store_true", help="Override sigma to 1.0 before fitting")
     args = ap.parse_args()
 
     df = load_ct(Path(args.data))
     if args.event:
-        df = df[df["event"] == args.event]
+        df = df[df["event"] == args.event].copy()
+        if df.empty:
+            # 列出可用事件，避免空結果誤解
+            all_events = sorted(load_ct(Path(args.data))["event"].unique().tolist())
+            print(f"[ERROR] Event '{args.event}' not found in {args.data}. Available: {all_events}")
+            raise SystemExit(2)
+
+    # 統一視窗（若提供 profile）
+    wk = _read_window_from_profile(args.profile)
 
     by_event = {}
     for ev in sorted(df["event"].unique()):
         dfe = df[df["event"] == ev].copy()
         if dfe.empty: continue
+        dfe = _apply_window(dfe, wk)
+        if args.preclean:
+            dfe = _preclean(dfe, *map(float, args.sigma_quantiles.split(",")), args.zmax, args.ct2_q_hi)
+        if args.uniform_weight and "sigma" in dfe:
+            dfe = dfe.copy(); dfe["sigma"] = 1.0
 
-        tmp_all = Path("data/ct/_tmp_all.csv")
+        if dfe.empty: 
+            continue
+
+        tmp_all = Path("data/ct/_tmp_all.csv"); tmp_all.parent.mkdir(parents=True, exist_ok=True)
         dfe.to_csv(tmp_all, index=False)
         r_all = do_fit(tmp_all, Path(args.profile) if args.profile else None, method=args.method)
 
@@ -58,7 +130,7 @@ def main():
                 "intercept_log10": _get_intercept_any(r),
                 "n": _get_n_used(r, len(dfi)),
                 "method": args.method,
-                "window_k": _get_window_k(r)
+                "window_k": _get_window_k(r) or wk
             }
 
         by_event[ev] = {
@@ -68,7 +140,7 @@ def main():
                 "intercept_log10": _get_intercept_any(r_all),
                 "n": _get_n_used(r_all, len(dfe)),
                 "method": args.method,
-                "window_k": _get_window_k(r_all)
+                "window_k": _get_window_k(r_all) or wk
             }
         }
 
