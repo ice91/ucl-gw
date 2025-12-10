@@ -148,6 +148,41 @@ package:
 	$(PIP) freeze > reports/pip-freeze.txt
 	zip -ur submission_envelope.zip configs examples reports figs README.md Makefile prediction_ledger.yaml
 
+# ========= 合成資料工作流 =========
+
+sim-smoke:
+	$(PY) -m scripts.sim_ct_bounds --event SIM_SMOKE --ifos H1,L1,V1 \
+		--fmin 80 --fmax 280 --n-bins 20 --slope 2 --log10A -10 \
+		--sigma-rel 0.10 --p-out 0.0 --hetero 1 --seed 1 --append
+	$(PY) -m scripts.slope2_perifo \
+		--data data/ct/events/SIM_SMOKE_ct_bounds.csv \
+		--method huber --preclean --sigma-quantiles 0.01,0.99 --zmax 3.5 --ct2-q-hi 0.99
+
+sim-outlier:
+	$(PY) -m scripts.sim_ct_bounds --event SIM_OUT --ifos H1,L1,V1 \
+		--fmin 80 --fmax 280 --n-bins 20 --slope 2 --log10A -10 \
+		--sigma-rel 0.15 --p-out 0.03 --out-mult 20.0 --hetero 1 --seed 7
+	$(PY) -m scripts.slope2_perifo --data data/ct/events/SIM_OUT_ct_bounds.csv --method wls
+	$(PY) -m scripts.slope2_perifo --data data/ct/events/SIM_OUT_ct_bounds.csv \
+		--method huber --preclean --sigma-quantiles 0.01,0.99 --zmax 3.5 --ct2-q-hi 0.99
+
+sim-sweep:
+	# 真 Null
+	$(PY) -m scripts.sim_ct_bounds --event SIM_NULL --ifos H1,L1,V1 \
+		--fmin 80 --fmax 280 --n-bins 20 --slope 0 --log10A -10 \
+		--sigma-rel 0.10 --p-out 0.0 --hetero 1 --seed 11
+	$(PY) -m scripts.slope2_null_perm \
+		--data data/ct/events/SIM_NULL_ct_bounds.csv \
+		--method huber --n-perm 3000 --two-sided
+	# 真效應（s=2）
+	$(PY) -m scripts.sim_ct_bounds --event SIM_S2 --ifos H1,L1,V1 \
+		--fmin 80 --fmax 280 --n-bins 20 --slope 2 --log10A -10 \
+		--sigma-rel 0.10 --p-out 0.0 --hetero 1 --seed 13
+	$(PY) -m scripts.slope2_null_perm \
+		--data data/ct/events/SIM_S2_ct_bounds.csv \
+		--method huber --n-perm 3000 --two-sided
+
+
 clean:
 	rm -f reports/* figs/*
 
