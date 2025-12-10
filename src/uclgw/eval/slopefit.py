@@ -107,11 +107,19 @@ def do_fit(
     df = df.replace([np.inf, -np.inf], np.nan).dropna()
     df = df[df["delta_ct2"] > 0]
 
-    x = np.log10(df["k"].values.astype(float))
-    y = np.log10(df["delta_ct2"].values.astype(float))
+    #x = np.log10(df["k"].values.astype(float))
+    #y = np.log10(df["delta_ct2"].values.astype(float))
     # measurement-weights：若無 sigma 欄位，給一個溫和的固定誤差
-    sigma = df.get("sigma", pd.Series(np.full(len(df), 1e-2))).values.astype(float)
-    w_meas = 1.0 / (np.maximum(sigma, 1e-12) ** 2)
+    #sigma = df.get("sigma", pd.Series(np.full(len(df), 1e-2))).values.astype(float)
+    #w_meas = 1.0 / (np.maximum(sigma, 1e-12) ** 2)
+    x = np.log10(df["k"].values.astype(float))
+    y_lin = df["delta_ct2"].values.astype(float)
+    y = np.log10(y_lin)
+    # measurement-weights：在 log10(y) 空間的近似
+    sigma_y = df.get("sigma", pd.Series(np.full(len(df), 1e-2))).values.astype(float)
+    ln10 = np.log(10.0)
+    sigma_log = sigma_y / (np.maximum(y_lin, 1e-30) * ln10)
+    w_meas = 1.0 / (np.maximum(sigma_log, 1e-12) ** 2)
 
     X = np.vstack([x, np.ones_like(x)]).T
 
