@@ -11,21 +11,53 @@ from uclgw.features.network_timing import network_delay_bounds
 from uclgw.features.dispersion_fit import proxy_k2_points, phasefit_points
 from uclgw.combine.aggregate import append_event_points
 
-C_LIGHT = 299792458.0
+C_LIGHT = 299_792_458.0
 
 def _ensure_standard_schema(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
+    """
+    保障輸出欄位統一為：
+      ['event','ifo','f_hz','k','delta_ct2','sigma']
+    - 雙向補欄：缺 f_hz 用 k 還原；缺 k 用 f_hz 推回
+    - 數值轉型；delta_ct2 加下界夾制
+    - sigma 缺省補 1.0
+    """
     required = ["event","ifo","f_hz","k","delta_ct2","sigma"]
+    df = df.copy()
     if df.empty:
         return pd.DataFrame(columns=required)
+
+    # 先把已存在欄位轉成數值以避免 obj/str 造成 NaN
+    for c in ["f_hz","k","delta_ct2","sigma"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    # 雙向補齊 f_hz / k
     if "f_hz" not in df.columns and "k" in df.columns:
         df["f_hz"] = (df["k"].astype(float) * C_LIGHT) / (2.0*np.pi)
+    if "k" not in df.columns and "f_hz" in df.columns:
+        df["k"] = (2.0*np.pi*df["f_hz"].astype(float)) / C_LIGHT
+
+    # 其他欄位保險
     if "delta_ct2" not in df.columns and "y" in df.columns:
-        df["delta_ct2"] = df["y"].astype(float).clip(lower=1e-18)
+        df["delta_ct2"] = pd.to_numeric(df["y"], errors="coerce")
     if "sigma" not in df.columns:
         df["sigma"] = 1.0
-    keep = ["event","ifo","f_hz","k","delta_ct2","sigma"]
-    return df[keep]
+
+    # 物理下界（避免非正數進 log）
+    if "delta_ct2" in df.columns:
+        df["delta_ct2"] = df["delta_ct2"].astype(float).clip(lower=1e-18)
+
+    # 最終欄序
+    out = pd.DataFrame(columns=required)
+    for c in required:
+        if c in df.columns:
+            out[c] = df[c]
+    # event/ifo 轉字串以避免之後 concat 出現混型
+    if "event" in out.columns:
+        out["event"] = out["event"].astype(str)
+    if "ifo" in out.columns:
+        out["ifo"] = out["ifo"].astype(str)
+    return out[required]
 
 def main():
     ap = argparse.ArgumentParser(description="Build δc_T^2(k) points for an event (and optionally aggregate).")
@@ -38,7 +70,7 @@ def main():
     ap.add_argument("--null", choices=["none", "timeshift"], default="none", help="Apply a laboratory null.")
     ap.add_argument("--label", default="", help="Suffix for event name (e.g. OFF)")
 
-    # phasefit 參數
+    # phase-fit 參數
     ap.add_argument("--coh-min", type=float, default=0.7, help="coherence^2 threshold for per-bin local fit")
     ap.add_argument("--coh-wide-min", type=float, default=0.80, help="coherence^2 threshold used ONLY for the wideband trend fit (L_eff)")
     ap.add_argument("--coh-bin-min", type=float, default=0.80, help="mean coherence^2 requirement inside each bin")
@@ -92,6 +124,7 @@ def main():
         )
 
     df = _ensure_standard_schema(df)
+
     out_dir = ROOT / "data/ct/events"; out_dir.mkdir(parents=True, exist_ok=True)
     out_event = out_dir / f"{event}_ct_bounds.csv"
     df.to_csv(out_event, index=False)

@@ -3,8 +3,10 @@ from __future__ import annotations
 import os, glob, math, json
 from dataclasses import dataclass, asdict
 from typing import List
+import numpy as np
 import pandas as pd
 
+C_LIGHT = 299_792_458.0
 REQUIRED_COLS = ["event", "ifo", "f_hz", "k", "delta_ct2", "sigma"]
 
 @dataclass
@@ -21,12 +23,34 @@ def _is_finite(x) -> bool:
     except Exception:
         return False
 
-def _coerce_types(df: pd.DataFrame) -> pd.DataFrame:
+def _coerce_ct_schema(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    在聚合端強制補齊/轉型：
+      - event/ifo → str
+      - f_hz/k 雙向補齊
+      - delta_ct2 clip 至 >= 1e-18
+      - sigma 缺省補 1.0
+    """
     df = df.copy()
-    df["event"] = df["event"].astype(str)
-    df["ifo"] = df["ifo"].astype(str)
-    for c in ["f_hz", "k", "delta_ct2", "sigma"]:
-        df[c] = pd.to_numeric(df[c], errors="coerce")
+    if "event" in df.columns:
+        df["event"] = df["event"].astype(str)
+    if "ifo" in df.columns:
+        df["ifo"] = df["ifo"].astype(str)
+
+    for c in ["f_hz","k","delta_ct2","sigma"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    if "k" not in df.columns and "f_hz" in df.columns:
+        df["k"] = (2.0*np.pi*df["f_hz"].astype(float)) / C_LIGHT
+    if "f_hz" not in df.columns and "k" in df.columns:
+        df["f_hz"] = (df["k"].astype(float) * C_LIGHT) / (2.0*np.pi)
+
+    if "sigma" not in df.columns:
+        df["sigma"] = 1.0
+    if "delta_ct2" in df.columns:
+        df["delta_ct2"] = df["delta_ct2"].astype(float).clip(lower=1e-18)
+
     return df
 
 def load_event_csvs(events_dir: str | os.PathLike) -> List[str]:
@@ -36,7 +60,7 @@ def load_event_csvs(events_dir: str | os.PathLike) -> List[str]:
 def aggregate(events_dir: str | os.PathLike = "data/ct/events",
               out_csv: str | os.PathLike = "data/ct/ct_bounds.csv",
               write_summary_json: str | os.PathLike | None = None) -> AggregateSummary:
-    # 統一將 PathLike 轉為字串，避免 JSON dump 出錯
+    # PathLike 正規化
     events_dir = os.fspath(events_dir)
     out_csv = os.fspath(out_csv)
     write_summary_json = os.fspath(write_summary_json) if write_summary_json is not None else None
@@ -44,7 +68,6 @@ def aggregate(events_dir: str | os.PathLike = "data/ct/events",
     os.makedirs(os.path.dirname(out_csv), exist_ok=True)
     fns = load_event_csvs(events_dir)
     if not fns:
-        # 建立空框架以利 downstream 腳本處理
         pd.DataFrame(columns=REQUIRED_COLS).to_csv(out_csv, index=False)
         summary = AggregateSummary(out_csv=str(out_csv), n_files=0, n_rows=0, n_events=0, events=[])
         if write_summary_json:
@@ -55,13 +78,16 @@ def aggregate(events_dir: str | os.PathLike = "data/ct/events",
     frames: List[pd.DataFrame] = []
     for fn in fns:
         df = pd.read_csv(fn)
+        # 先強制補齊/轉型，避免舊檔缺欄造成 KeyError
+        df = _coerce_ct_schema(df)
         missing = [c for c in REQUIRED_COLS if c not in df.columns]
         if missing:
             raise ValueError(f"{fn} 缺少欄位: {missing}")
-        df = _coerce_types(df)
+
         # 基礎清理：去除非數值與非有限值
         for c in ["f_hz", "k", "delta_ct2", "sigma"]:
             df = df[df[c].apply(_is_finite)]
+
         frames.append(df[REQUIRED_COLS])
 
     cat = pd.concat(frames, axis=0, ignore_index=True)
