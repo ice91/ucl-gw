@@ -10,32 +10,37 @@ sys.path.append(str(ROOT / "src"))
 from uclgw.eval.slopefit import load_ct, do_fit
 
 def _get_intercept_any(r):
-    if hasattr(r, "intercept_log10"): return float(r.intercept_log10)
-    if hasattr(r, "intercept"): return float(r.intercept)
+    if hasattr(r, "intercept_log10"):
+        return float(r.intercept_log10)
+    if hasattr(r, "intercept"):
+        return float(r.intercept)
     return None
 
 def _get_n_used(r, fallback_len):
     for attr in ("mask_count","n_points","n"):
         v = getattr(r, attr, None)
-        if v is not None: return int(v)
+        if v is not None:
+            return int(v)
     return int(fallback_len)
 
 def _get_window_k(r):
     wk = getattr(r, "window_k", None)
     if isinstance(wk, (list, tuple)) and len(wk) == 2:
-        try: return [float(wk[0]), float(wk[1])]
-        except Exception: return None
+        try:
+            return [float(wk[0]), float(wk[1])]
+        except Exception:
+            return None
     return None
 
 def _finite_mask(df: pd.DataFrame) -> pd.Series:
     cols = [c for c in ["k","delta_ct2","sigma"] if c in df.columns]
-    m = np.isfinite(df[cols]).all(axis=1)
-    return m
+    return np.isfinite(df[cols]).all(axis=1)
 
 def _preclean(df: pd.DataFrame, sigma_q_lo: float, sigma_q_hi: float,
               zmax: float, ct2_q_hi: float) -> pd.DataFrame:
     df = df[_finite_mask(df)].copy()
-    if df.empty: return df
+    if df.empty: 
+        return df
     lo = df["sigma"].quantile(sigma_q_lo) if "sigma" in df else None
     hi = df["sigma"].quantile(sigma_q_hi) if "sigma" in df else None
     ms = np.ones(len(df), dtype=bool)
@@ -47,8 +52,7 @@ def _preclean(df: pd.DataFrame, sigma_q_lo: float, sigma_q_hi: float,
         else (np.abs((logy - mu) / sd) <= zmax)
     qhi = df["delta_ct2"].quantile(ct2_q_hi)
     mt = df["delta_ct2"] <= max(float(qhi), 1e-18)
-    m = ms & mz & mt
-    return df[m].copy()
+    return df[ms & mz & mt].copy()
 
 def _apply_window(df: pd.DataFrame, window_k):
     if window_k and len(window_k) == 2:
@@ -57,12 +61,13 @@ def _apply_window(df: pd.DataFrame, window_k):
     return df
 
 def _read_window_from_profile(profile_path):
-    if not profile_path: return None
+    if not profile_path:
+        return None
     try:
         import yaml, numpy as _np
         cfg = yaml.safe_load(Path(profile_path).read_text())
         if isinstance(cfg, dict):
-            if "window_k" in cfg and isinstance(cfg["window_k"], (list, tuple)) and len(cfg["window_k"])==2:
+            if "window_k" in cfg and isinstance(cfg["window_k"], (list, tuple)) and len(cfg["window_k"]) == 2:
                 return [float(cfg["window_k"][0]), float(cfg["window_k"][1])]
             if "fmin" in cfg and "fmax" in cfg:
                 c = 299_792_458.0
@@ -106,24 +111,30 @@ def main():
     by_event = {}
     for ev in sorted(df["event"].unique()):
         dfe = df[df["event"] == ev].copy()
-        if dfe.empty: continue
+        if dfe.empty:
+            continue
         dfe = _apply_window(dfe, wk)
         if args.preclean:
             dfe = _preclean(dfe, *map(float, args.sigma_quantiles.split(",")), args.zmax, args.ct2_q_hi)
         if args.uniform_weight and "sigma" in dfe:
-            dfe = dfe.copy(); dfe["sigma"] = 1.0
+            dfe = dfe.copy()
+            dfe["sigma"] = 1.0
 
         if dfe.empty:
             continue
 
-        tmp_all = Path("data/ct/_tmp_all.csv"); tmp_all.parent.mkdir(parents=True, exist_ok=True)
+        # combined
+        tmp_all = Path("data/ct/_tmp_all.csv")
+        tmp_all.parent.mkdir(parents=True, exist_ok=True)
         dfe.to_csv(tmp_all, index=False)
         r_all = do_fit(tmp_all, Path(args.profile) if args.profile else None, method=args.method)
 
+        # per-IFO（修正：用 dfe 的遮罩切 dfe，避免 reindex 警告）
         perifo = {}
         for ifo in sorted(dfe["ifo"].unique()):
-            dfi = dfe[df["ifo"] == ifo].copy()
-            if dfi.empty: continue
+            dfi = dfe[dfe["ifo"] == ifo].copy()
+            if dfi.empty:
+                continue
             tmp_1 = Path("data/ct/_tmp_1.csv")
             dfi.to_csv(tmp_1, index=False)
             r = do_fit(tmp_1, Path(args.profile) if args.profile else None, method=args.method)
