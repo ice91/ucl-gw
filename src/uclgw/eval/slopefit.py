@@ -54,24 +54,47 @@ def _irls_huber(
     max_iter: int = 50,
     tol: float = 1e-8,
 ) -> np.ndarray:
-    # 初值：WLS（若 w_meas 全 1 就等同 OLS）
+    """
+    Huber IRLS with leverage-standardized residuals:
+    r_std = r / (s * sqrt(1 - h_ii)), where h_ii is the weighted hat diagonal.
+    """
+    # 初值：WLS
     beta = _wls(X, y, w_meas)
+
     for _ in range(max_iter):
         yhat = X @ beta
         r = y - yhat
+
+        # robust 尺度
         s = _mad_scale(r)
-        u = r / s
-        # Huber 權重：|u|<=c → 1；|u|>c → c/|u|
-        w_psi = np.ones_like(u)
-        big = np.abs(u) > c
-        w_psi[big] = c / np.abs(u[big])
-        # 疊乘 measurement-weights
+
+        # 以當前的有效權重估帽子矩陣對角（加權版）
+        # W^{1/2}X (X^T W X)^{-1} X^T W^{1/2}
+        Wsqrt = np.sqrt(w_meas)
+        Z = (Wsqrt[:, None] * X)                 # Z = W^{1/2} X
+        XtWX = Z.T @ Z
+        XtWX_inv = np.linalg.inv(XtWX)
+        # h_ii = row-wise dot of Z @ XtWX_inv with Z
+        H = Z @ XtWX_inv @ Z.T
+        h = np.clip(np.diag(H), 0.0, 0.999999)   # 穩定化
+
+        # 槓桿標準化殘差
+        r_std = r / (s * np.sqrt(1.0 - h))
+
+        # Huber 權重（psi(u)/u）
+        w_psi = np.ones_like(r_std)
+        big = np.abs(r_std) > c
+        w_psi[big] = c / np.abs(r_std[big])
+
+        # 疊乘 measurement-weights → 有效權重
         w_eff = w_meas * w_psi
+
         beta_new = _wls(X, y, w_eff)
         if np.linalg.norm(beta_new - beta) < tol * (1.0 + np.linalg.norm(beta)):
             beta = beta_new
             break
         beta = beta_new
+
     return beta
 
 def do_fit(
