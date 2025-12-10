@@ -15,10 +15,10 @@ def _read_window_from_profile(profile_path):
         import yaml
         cfg = yaml.safe_load(Path(profile_path).read_text())
         if isinstance(cfg, dict):
-            if "window_k" in cfg and isinstance(cfg["window_k"], (list, tuple)) and len(cfg["window_k"])==2:
+            if "window_k" in cfg and isinstance(cfg["window_k"], (list, tuple)) and len(cfg["window_k"]) == 2:
                 return [float(cfg["window_k"][0]), float(cfg["window_k"][1])]
             if "fmin" in cfg and "fmax" in cfg:
-                c = 299792458.0
+                c = 299_792_458.0
                 kmin = 2*np.pi*float(cfg["fmin"])/c
                 kmax = 2*np.pi*float(cfg["fmax"])/c
                 return [float(kmin), float(kmax)]
@@ -41,8 +41,7 @@ def _preclean(df: pd.DataFrame, sigma_q_lo: float, sigma_q_hi: float,
         ms = (df["sigma"] >= lo) & (df["sigma"] <= hi)
     logy = np.log10(df["delta_ct2"].clip(lower=1e-18))
     mu, sd = np.mean(logy), np.std(logy, ddof=1)
-    mz = np.ones(len(df), dtype=bool) if not np.isfinite(sd) or sd == 0 \
-        else (np.abs((logy - mu) / sd) <= zmax)
+    mz = np.ones(len(df), dtype=bool) if not np.isfinite(sd) or sd == 0 else (np.abs((logy - mu) / sd) <= zmax)
     qhi = df["delta_ct2"].quantile(ct2_q_hi)
     mt = df["delta_ct2"] <= max(float(qhi), 1e-18)
     return df[ms & mz & mt].copy()
@@ -87,6 +86,10 @@ def main():
     if len(df) < 8:
         raise SystemExit("Not enough points after filtering.")
 
+    # 推斷事件名（若命令列未指定，且資料只含一個 event）
+    evs = sorted(df["event"].dropna().unique().tolist()) if "event" in df else []
+    event_name = args.event or (evs[0] if len(evs) == 1 else "ALL")
+
     tmp = Path("data/ct/_tmp_real.csv"); tmp.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(tmp, index=False)
     r_real = do_fit(tmp, Path(args.profile) if args.profile else None, method=args.method)
@@ -102,7 +105,6 @@ def main():
         s_perm.append(float(rp.slope))
     s_perm = np.asarray(s_perm)
 
-    # 單尾（依 s_real 符號）；雙尾
     if s_real >= 0:
         p_one = float((s_perm >= s_real).mean())
     else:
@@ -110,7 +112,7 @@ def main():
     p_two = float((np.abs(s_perm) >= abs(s_real)).mean()) if args.two_sided else None
 
     out = {
-        "event": args.event,
+        "event": event_name,
         "method": args.method,
         "window_k": wk,
         "slope_real": s_real,
@@ -123,8 +125,9 @@ def main():
         "uniform_weight": bool(args.uniform_weight)
     }
     Path("reports").mkdir(parents=True, exist_ok=True)
-    Path("reports/slope2_null_perm.json").write_text(json.dumps(out, indent=2))
-    print("Wrote reports/slope2_null_perm.json")
+    out_path = Path("reports") / f"slope2_null_perm_{event_name}.json"
+    out_path.write_text(json.dumps(out, indent=2))
+    print(f"Wrote {out_path}")
 
 if __name__ == "__main__":
     main()

@@ -36,18 +36,15 @@ def _preclean(df: pd.DataFrame, sigma_q_lo: float, sigma_q_hi: float,
               zmax: float, ct2_q_hi: float) -> pd.DataFrame:
     df = df[_finite_mask(df)].copy()
     if df.empty: return df
-    # sigma 量化截尾
     lo = df["sigma"].quantile(sigma_q_lo) if "sigma" in df else None
     hi = df["sigma"].quantile(sigma_q_hi) if "sigma" in df else None
     ms = np.ones(len(df), dtype=bool)
     if lo is not None and hi is not None:
         ms = (df["sigma"] >= lo) & (df["sigma"] <= hi)
-    # log10(delta_ct2) z-score
     logy = np.log10(df["delta_ct2"].clip(lower=1e-18))
     mu, sd = np.mean(logy), np.std(logy, ddof=1)
     mz = np.ones(len(df), dtype=bool) if not np.isfinite(sd) or sd == 0 \
         else (np.abs((logy - mu) / sd) <= zmax)
-    # 上尾去極端（原尺度）
     qhi = df["delta_ct2"].quantile(ct2_q_hi)
     mt = df["delta_ct2"] <= max(float(qhi), 1e-18)
     m = ms & mz & mt
@@ -68,7 +65,7 @@ def _read_window_from_profile(profile_path):
             if "window_k" in cfg and isinstance(cfg["window_k"], (list, tuple)) and len(cfg["window_k"])==2:
                 return [float(cfg["window_k"][0]), float(cfg["window_k"][1])]
             if "fmin" in cfg and "fmax" in cfg:
-                c = 299792458.0
+                c = 299_792_458.0
                 kmin = 2*_np.pi*float(cfg["fmin"])/c
                 kmax = 2*_np.pi*float(cfg["fmax"])/c
                 return [float(kmin), float(kmax)]
@@ -87,16 +84,21 @@ def main():
     ap.add_argument("--zmax", type=float, default=3.5, help="Z-score threshold on log10(delta_ct2)")
     ap.add_argument("--ct2-q-hi", type=float, default=0.99, help="Upper-tail quantile for delta_ct2")
     ap.add_argument("--uniform-weight", action="store_true", help="Override sigma to 1.0 before fitting")
+    ap.add_argument("--out", default=None, help="Output json path (default: auto name by EVENT/ALL)")
     args = ap.parse_args()
 
     df = load_ct(Path(args.data))
     if args.event:
         df = df[df["event"] == args.event].copy()
         if df.empty:
-            # 列出可用事件，避免空結果誤解
             all_events = sorted(load_ct(Path(args.data))["event"].unique().tolist())
             print(f"[ERROR] Event '{args.event}' not found in {args.data}. Available: {all_events}")
             raise SystemExit(2)
+
+    # 自動輸出檔名
+    evs = sorted(df["event"].dropna().unique().tolist()) if "event" in df else []
+    tag = args.event or (evs[0] if len(evs) == 1 else "ALL")
+    out_path = Path(args.out) if args.out else Path("reports") / f"slope2_perifo_{tag}.json"
 
     # 統一視窗（若提供 profile）
     wk = _read_window_from_profile(args.profile)
@@ -111,7 +113,7 @@ def main():
         if args.uniform_weight and "sigma" in dfe:
             dfe = dfe.copy(); dfe["sigma"] = 1.0
 
-        if dfe.empty: 
+        if dfe.empty:
             continue
 
         tmp_all = Path("data/ct/_tmp_all.csv"); tmp_all.parent.mkdir(parents=True, exist_ok=True)
@@ -120,7 +122,7 @@ def main():
 
         perifo = {}
         for ifo in sorted(dfe["ifo"].unique()):
-            dfi = dfe[dfe["ifo"] == ifo].copy()
+            dfi = dfe[df["ifo"] == ifo].copy()
             if dfi.empty: continue
             tmp_1 = Path("data/ct/_tmp_1.csv")
             dfi.to_csv(tmp_1, index=False)
@@ -145,9 +147,9 @@ def main():
         }
 
     out = {"by_event": by_event, "overall": {"n_events": len(by_event)}}
-    Path("reports").mkdir(parents=True, exist_ok=True)
-    Path("reports/slope2_perifo.json").write_text(json.dumps(out, indent=2))
-    print("Wrote reports/slope2_perifo.json")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(out, indent=2))
+    print(f"Wrote {out_path}")
 
 if __name__ == "__main__":
     main()

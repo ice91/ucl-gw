@@ -14,7 +14,8 @@ def _fit_slope_on_df(df: pd.DataFrame, method: str = "huber") -> float:
     tmp = ROOT / "data/ct/_tmp_sim.csv"
     tmp.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(tmp, index=False)
-    r = do_fit(tmp, profile_path=None, method=method)
+    #r = do_fit(tmp, profile_path=None, method=method)
+    r = do_fit(tmp, None, method=method)
     return float(r.slope)
 
 def test_estimator_accuracy_no_outlier():
