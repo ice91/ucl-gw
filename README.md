@@ -27,7 +27,7 @@ make run-bbh190412
 
 輸出重點會出現在：
 
-* `reports/nlo_onepager.md`（**一頁報告**：$(\hat s)$、固定斜率上限 $(A_{\rm ul})$、Exit/Level）
+* `reports/nlo_onepager.md`（**一頁報告**：($\hat s$)、固定斜率上限 $(A_{\rm ul})$、Exit/Level）
 * `figs/nlo_slope_fit.png`（對數域線性擬合＋殘差）
 * `reports/slope2_ul_m2.json`（固定 $(s{=}2)$ 的上限數值）
 * `reports/flux_ratio.json`、`reports/lock_check.csv`（三件套治理證據）
