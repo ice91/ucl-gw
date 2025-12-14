@@ -27,9 +27,9 @@ make run-bbh190412
 
 輸出重點會出現在：
 
-* `reports/nlo_onepager.md`（**一頁報告**：(\hat s)、固定斜率上限 (A_{\rm ul})、Exit/Level）
+* `reports/nlo_onepager.md`（**一頁報告**：$(\hat s)、固定斜率上限 (A_{\rm ul})、Exit/Level）$
 * `figs/nlo_slope_fit.png`（對數域線性擬合＋殘差）
-* `reports/slope2_ul_m2.json`（固定 (s{=}2) 的上限數值）
+* `reports/slope2_ul_m2.json`（固定 $(s{=}2)$ 的上限數值）
 * `reports/flux_ratio.json`、`reports/lock_check.csv`（三件套治理證據）
 * `prediction_ledger.yaml`（帳本條目與雜湊）
 * `reports/aggregate_summary.json`（彙整摘要）
@@ -124,12 +124,12 @@ make run-bbh190412
 
 * `reports/nlo_onepager.md`（包含 $(\hat s)、(A_{\rm ul})、RMS、(f_\star)、Exit=INC、Level=B、hash$）
 * `figs/nlo_slope_fit.png`
-* `reports/slope2_ul_m2.json`（固定 (s{=}2) 上限）
+* `reports/slope2_ul_m2.json`（固定 $(s{=}2)$ 上限）
 * `reports/coherence_GW190412.json`（相干偵查門檻）
 * `reports/flux_ratio.json`、`reports/lock_check.csv`
 * `prediction_ledger.yaml`（帳本條目＋雜湊）
 
-> **敘事約束**：若 (\hat s\neq 2) 且沒有穩健 (k^2) 主導窗，該頻帶結論為 **INC**；僅回報固定斜率上限 **(A_{\rm ul})**，並以「與 GR 相容」描述。
+> **敘事約束**：若 $(\hat s\neq 2)$ 且沒有穩健 $(k^2)$ 主導窗，該頻帶結論為 **INC**；僅回報固定斜率上限 **(A_{\rm ul})**，並以「與 GR 相容」描述。
 
 ---
 
