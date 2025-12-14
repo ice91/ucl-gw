@@ -34,7 +34,7 @@ make run-bbh190412
 * `prediction_ledger.yaml`（帳本條目與雜湊）
 * `reports/aggregate_summary.json`（彙整摘要）
 
-> **敘事原則（與論文一致）**：若在該頻帶**未見穩健 (k^2) 主導窗**，則 **NLO=INC**，並以**固定斜率 (s{=}2)** 回報係數上限 (A_{\rm ul})；此結果以 **「與 GR 相容」**（(c_T=1)）表述。
+> **敘事原則（與論文一致）**：若在該頻帶**未見穩健 $(k^2)$ 主導窗**，則 **NLO=INC**，並以**固定斜率 $(s{=}2)$** 回報係數上限 $(A_{\rm ul})$；此結果以 **「與 GR 相容」**（$(c_T=1)$）表述。
 
 ---
 
@@ -42,9 +42,9 @@ make run-bbh190412
 
 | QA 指標                                    | 核心意涵（不超出論文）                                                                | 主要腳本 / 產物                                                                                                                                |
 | ---------------------------------------- | -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| **Flux-Ratio** (R_{X/Y}\to 1)            | 路徑差異僅為改良流 (\nabla_\mu J^\mu)（C2）                                           | `scripts/flux_ratio_frw.py` → `reports/flux_ratio.json`                                                                                  |
-| **Tensor-Lock** (\Delta_{\rm lock}\to 0) | Ward-type locking (K=G)（C3）(\Rightarrow c_T) 侷限於光速於二次張量階                   | `scripts/lock_check_tensor.py` → `reports/lock_check.csv`                                                                                |
-| **NLO slope**（尋找 (k^2) 指紋）               | 在允許窗中查驗 (\delta c_T^2(k)=A,k^2) 的**斜率 2**；若無穩健窗 (\Rightarrow) **INC + 上限** | `scripts/nlo_slope_fit.py` / `scripts/slope2_perifo.py` 等 → `figs/nlo_slope_fit.png`, `reports/slope2_*.json`, `reports/nlo_onepager.md` |
+| **Flux-Ratio** $(R_{X/Y}\to 1)$            | 路徑差異僅為改良流 $(\nabla_\mu J^\mu)$（C2）                                           | `scripts/flux_ratio_frw.py` → `reports/flux_ratio.json`                                                                                  |
+| **Tensor-Lock** $(\Delta_{\rm lock}\to 0)$ | Ward-type locking (K=G)（C3）$(\Rightarrow c_T)$ 侷限於光速於二次張量階                   | `scripts/lock_check_tensor.py` → `reports/lock_check.csv`                                                                                |
+| **NLO slope**（尋找 $(k^2)$ 指紋）               | 在允許窗中查驗 $(\delta c_T^2(k)=A,k^2)$ 的**斜率 2**；若無穩健窗 $(\Rightarrow)$ **INC + 上限** | `scripts/nlo_slope_fit.py` / `scripts/slope2_perifo.py` 等 → `figs/nlo_slope_fit.png`, `reports/slope2_*.json`, `reports/nlo_onepager.md` |
 
 > **治理輸出**：`scripts/qa_gate.py` 會彙整為 `reports/aggregate_summary.json`，並根據檢定給出 **Exit code**（PASS/FAIL/OOP/INC）與**等級**（例：Level-B）。
 
@@ -55,7 +55,7 @@ make run-bbh190412
 ```
 configs/            # 設定檔：baselines/*、profiles/*、tensor_specs.yaml
 data/
-  ct/               # 聚合後的 c_T^2(k) 邊界資料（含事件明細）
+  ct/               # 聚合後的 $c_T^2(k)$ 邊界資料（含事件明細）
   raw/gwosc/...     # 來自 GWOSC 的原始資料（H1/L1/V1）
   work/{psd,segments,whitened}/
 examples/           # 範例資料（快速跑 NLO 示範）
@@ -110,7 +110,7 @@ make baselines
 
 ## 5. 真實事件：GW190412（60–300 Hz，phase-fit）
 
-> 與論文 §5.4 的一頁報告敘事一致：本頻帶 **NLO=INC**，回報固定斜率 (s{=}2) 的 (A_{\rm ul})，並標記 **Level-B**；結果與 **GR 相容**。
+> 與論文 §5.4 的一頁報告敘事一致：本頻帶 **NLO=INC**，回報固定斜率 $(s{=}2)$ 的 $(A_{\rm ul})$，並標記 **Level-B**；結果與 **GR 相容**。
 
 ### 5.1 一鍵流程（含 OFF）
 
@@ -122,7 +122,7 @@ make run-bbh190412
 
 完成後重點輸出：
 
-* `reports/nlo_onepager.md`（包含 (\hat s)、(A_{\rm ul})、RMS、(f_\star)、Exit=INC、Level=B、hash）
+* `reports/nlo_onepager.md`（包含 $(\hat s)、(A_{\rm ul})、RMS、(f_\star)、Exit=INC、Level=B、hash$）
 * `figs/nlo_slope_fit.png`
 * `reports/slope2_ul_m2.json`（固定 (s{=}2) 上限）
 * `reports/coherence_GW190412.json`（相干偵查門檻）
@@ -192,11 +192,11 @@ make package
 
 | 檔案                                                 | 內容                                                                         | 用途            |
 | -------------------------------------------------- | -------------------------------------------------------------------------- | ------------- |
-| `reports/nlo_onepager.md`                          | 事件、頻帶、(\hat s)、CI、固定 (s{=}2) 上限 (A_{\rm ul})、RMS、(f_\star)、Exit/Level、hash | **期刊附檔／審稿檢視** |
-| `figs/nlo_slope_fit.png`                           | 對數域 (k)–(\delta c_T^2) 擬合、殘差、68% 帶                                         | 視覺審核          |
-| `reports/slope2_ul_m2.json`                        | (A_{\rm ul})（固定 (s{=}2)）                                                   | 上限彙整          |
+| `reports/nlo_onepager.md`                          | $事件、頻帶、(\hat s)、CI、固定 (s{=}2) 上限 (A_{\rm ul})、RMS、(f_\star)、Exit/Level、hash$ | **期刊附檔／審稿檢視** |
+| `figs/nlo_slope_fit.png`                           | 對數域 $(k)–(\delta c_T^2)$ 擬合、殘差、68% 帶                                         | 視覺審核          |
+| `reports/slope2_ul_m2.json`                        | $(A_{\rm ul})$（固定 $(s{=}2)$）                                                   | 上限彙整          |
 | `reports/flux_ratio.json`                          | 路徑通量比與誤差帶                                                                  | C2 稽核         |
-| `reports/lock_check.csv`                           | (\Delta_{\rm lock}) 指標                                                     | C3 稽核         |
+| `reports/lock_check.csv`                           | $(\Delta_{\rm lock})$ 指標                                                     | C3 稽核         |
 | `reports/coherence_*.json`                         | 相干門檻偵查建議值                                                                  | 盲調防護          |
 | `reports/aggregate_summary.json`                   | 本次工作流彙總（包含 Exit/Level）                                                     | 一鍵總表          |
 | `prediction_ledger.yaml`                           | 帳本條目（ID、hash、timestamp、seed）                                               | 可追溯／可稽核       |
@@ -211,9 +211,9 @@ make package
 | **PASS** | QA 條件皆滿足                                                      |
 | **FAIL** | 操作／數值錯誤（例如規格不收斂、單位地圖漂移）                                       |
 | **OOP**  | Out-of-Posture：超出既定姿態範圍（理論層級不相容）                              |
-| **INC**  | Inconclusive：頻帶／窗型受系統雜訊或邊界效應支配，**固定 (s{=}2)** 回報 (A_{\rm ul}) |
+| **INC**  | Inconclusive：頻帶／窗型受系統雜訊或邊界效應支配，**固定 $(s{=}2)$** 回報 $(A_{\rm ul})$ |
 
-> **GW190412（60–300 Hz）**：**INC**（未見穩健 (k^2) 窗），匯報 **固定 (s{=}2)** 之 (A_{\rm ul})，分級 **Level-B**；**與 GR 相容**。
+> **GW190412（60–300 Hz）**：**INC**（未見穩健 $(k^2)$ 窗），匯報 **固定 $(s{=}2)$** 之 $(A_{\rm ul})$，分級 **Level-B**；**與 GR 相容**。
 
 ---
 
@@ -237,9 +237,9 @@ pytest -q
 
 ## 11. 常見紅旗與處置（對齊論文 §6）
 
-* (R_{X/Y}) 非單調收斂或超出 ([1\pm\eta(h,L)]) → **邊界類別不符或姿態關閉**；修正 BC／啟用 PT-scalar。
-* (\Delta_{\rm lock}) 對正規化敏感 → **單位地圖漂移或規格解析 bug**；鎖定單位地圖、以 `gr_flat` baseline 交叉檢核。
-* (\hat s) 對 (f_\star)／資料 profile 敏感 → **系統雜訊主導**；改窗、啟用盲測、若持續則標記 **INC** 或 **OOP**（依姿態是否被破壞）。
+* $(R_{X/Y})$ 非單調收斂或超出 $([1\pm\eta(h,L)])$ → **邊界類別不符或姿態關閉**；修正 BC／啟用 PT-scalar。
+* $(\Delta_{\rm lock})$ 對正規化敏感 → **單位地圖漂移或規格解析 bug**；鎖定單位地圖、以 `gr_flat` baseline 交叉檢核。
+* $(\hat s)$ 對 $(f_\star)$／資料 profile 敏感 → **系統雜訊主導**；改窗、啟用盲測、若持續則標記 **INC** 或 **OOP**（依姿態是否被破壞）。
 
 ---
 
